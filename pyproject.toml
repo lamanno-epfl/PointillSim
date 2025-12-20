@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pointillsim"
+version = "0.1.0"
+description = "Rule-based Simulation Engine for Imaging-based Spatial Transcriptomics"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "La Manno Lab", email = "gioele.lamanno@epfl.ch"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+keywords = ["spatial transcriptomics", "simulation", "HybISS", "imaging"]
+dependencies = [
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "pandas>=1.3",
+    "shapely>=2.0",
+    "scikit-learn>=1.0",
+    "matplotlib>=3.5",
+    "tqdm>=4.60",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/lamanno-epfl/PointillSim"
+Repository = "https://github.com/lamanno-epfl/PointillSim"
+Issues = "https://github.com/lamanno-epfl/PointillSim/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pointillsim*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

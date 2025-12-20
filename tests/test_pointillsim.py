@@ -938,24 +938,22 @@ class TestVisualOutputs:
         axes[1].set_ylim(0, frame_size)
         axes[1].set_aspect('equal')
 
-        # Right: Overlay of cells with ellipses
-        # IMPORTANT: Set limits BEFORE adding patches for correct scaling
+        # Right: Cell sizes visualization (scatter with size proportional to cell area)
+        cell_areas = fov.cell_major_axis * fov.cell_minor_axis * np.pi
+        # Normalize sizes for visualization
+        size_scale = 50 * cell_areas / np.median(cell_areas)
+        axes[2].scatter(
+            fov.cell_centroids[:, 0],
+            fov.cell_centroids[:, 1],
+            c=[fov.cell_colors[i] for i in range(len(fov.cell_centroids))],
+            s=size_scale,
+            alpha=0.6,
+            linewidths=0
+        )
         axes[2].set_xlim(0, frame_size)
-        axes[2].set_ylim(0, frame_size)
-        for i in range(min(200, len(fov.cell_centroids))):  # Limit for performance
-            ellipse = matplotlib.patches.Ellipse(
-                fov.cell_centroids[i],
-                width=fov.cell_major_axis[i] * 2,
-                height=fov.cell_minor_axis[i] * 2,
-                angle=np.degrees(fov.cell_rotation[i]),
-                facecolor=fov.cell_colors[i],
-                edgecolor='black',
-                linewidth=0.3,
-                alpha=0.6
-            )
-            axes[2].add_patch(ellipse)
-        axes[2].set_aspect('equal')
-        axes[2].set_title('Cell Morphology (subset)')
+        axes[2].set_ylim(frame_size, 0)  # Invert y-axis like notebooks
+        axes[2].set_aspect('equal', adjustable='box')
+        axes[2].set_title('Cell Sizes (area-scaled)')
 
         plt.tight_layout()
         plt.savefig(persistent_output_dir / 'test_embedded_structures.png', dpi=150)
@@ -1148,25 +1146,23 @@ class TestVisualOutputs:
         ax2.set_title(f'Transcript Dots\n({len(dots_df)} dots)')
         ax2.set_aspect('equal')
 
-        # 3. Cell morphology (subset)
+        # 3. Cell sizes visualization (scatter with size proportional to cell area)
         ax3 = fig.add_subplot(2, 3, 3)
-        # IMPORTANT: Set limits BEFORE adding patches for correct scaling
+        cell_areas = fov.cell_major_axis * fov.cell_minor_axis * np.pi
+        # Normalize sizes for visualization
+        size_scale = 30 * cell_areas / np.median(cell_areas)
+        ax3.scatter(
+            fov.cell_centroids[:, 0],
+            fov.cell_centroids[:, 1],
+            c=[fov.cell_colors[i] for i in range(len(fov.cell_centroids))],
+            s=size_scale,
+            alpha=0.6,
+            linewidths=0
+        )
         ax3.set_xlim(0, frame_size)
-        ax3.set_ylim(0, frame_size)
-        for i in range(min(300, len(fov.cell_centroids))):
-            ellipse = matplotlib.patches.Ellipse(
-                fov.cell_centroids[i],
-                width=fov.cell_major_axis[i] * 2,
-                height=fov.cell_minor_axis[i] * 2,
-                angle=np.degrees(fov.cell_rotation[i]),
-                facecolor=fov.cell_colors[i],
-                edgecolor='black',
-                linewidth=0.2,
-                alpha=0.5
-            )
-            ax3.add_patch(ellipse)
-        ax3.set_title('Cell Morphology')
-        ax3.set_aspect('equal')
+        ax3.set_ylim(frame_size, 0)  # Invert y-axis like notebooks
+        ax3.set_aspect('equal', adjustable='box')
+        ax3.set_title('Cell Sizes (area-scaled)')
 
         # 4. Gene expression heatmap
         ax4 = fig.add_subplot(2, 3, 4)

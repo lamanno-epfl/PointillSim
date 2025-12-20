@@ -939,6 +939,9 @@ class TestVisualOutputs:
         axes[1].set_aspect('equal')
 
         # Right: Overlay of cells with ellipses
+        # IMPORTANT: Set limits BEFORE adding patches for correct scaling
+        axes[2].set_xlim(0, frame_size)
+        axes[2].set_ylim(0, frame_size)
         for i in range(min(200, len(fov.cell_centroids))):  # Limit for performance
             ellipse = matplotlib.patches.Ellipse(
                 fov.cell_centroids[i],
@@ -951,8 +954,6 @@ class TestVisualOutputs:
                 alpha=0.6
             )
             axes[2].add_patch(ellipse)
-        axes[2].set_xlim(0, frame_size)
-        axes[2].set_ylim(0, frame_size)
         axes[2].set_aspect('equal')
         axes[2].set_title('Cell Morphology (subset)')
 
@@ -1149,6 +1150,9 @@ class TestVisualOutputs:
 
         # 3. Cell morphology (subset)
         ax3 = fig.add_subplot(2, 3, 3)
+        # IMPORTANT: Set limits BEFORE adding patches for correct scaling
+        ax3.set_xlim(0, frame_size)
+        ax3.set_ylim(0, frame_size)
         for i in range(min(300, len(fov.cell_centroids))):
             ellipse = matplotlib.patches.Ellipse(
                 fov.cell_centroids[i],
@@ -1161,8 +1165,6 @@ class TestVisualOutputs:
                 alpha=0.5
             )
             ax3.add_patch(ellipse)
-        ax3.set_xlim(0, frame_size)
-        ax3.set_ylim(0, frame_size)
         ax3.set_title('Cell Morphology')
         ax3.set_aspect('equal')
 

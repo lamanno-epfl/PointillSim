@@ -951,8 +951,8 @@ class TestVisualOutputs:
             linewidths=0
         )
         axes[2].set_xlim(0, frame_size)
-        axes[2].set_ylim(frame_size, 0)  # Invert y-axis like notebooks
-        axes[2].set_aspect('equal', adjustable='box')
+        axes[2].set_ylim(0, frame_size)  # Same orientation as other plots
+        axes[2].set_aspect('equal')
         axes[2].set_title('Cell Sizes (area-scaled)')
 
         plt.tight_layout()
@@ -1160,8 +1160,8 @@ class TestVisualOutputs:
             linewidths=0
         )
         ax3.set_xlim(0, frame_size)
-        ax3.set_ylim(frame_size, 0)  # Invert y-axis like notebooks
-        ax3.set_aspect('equal', adjustable='box')
+        ax3.set_ylim(0, frame_size)  # Same orientation as other plots
+        ax3.set_aspect('equal')
         ax3.set_title('Cell Sizes (area-scaled)')
 
         # 4. Gene expression heatmap

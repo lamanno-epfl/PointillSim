@@ -48,6 +48,7 @@ from .rules.base import CellTypeRuleBase, DummyRule
 from .rules.random import RandomCellTypeRule, MixOfNCellTypesRule
 from .rules.spatial import ProbabilityNodeFieldRule, SingleTypeRule
 from .rules.neighbor import DeterministicNeighborAssignment
+from .rules.composite import DistanceBasedRule, CompositeRule
 
 # Experiment simulation
 from .experiment.hybiss import HybISS_Setup
@@ -55,10 +56,19 @@ from .experiment.properties import CellTypesProperties
 from .experiment.transfer import TransferFunctionBase, IdentityTransfer, AffineNonNegTransfer
 
 # Utilities
-from .utils.geometry import generate_uniform_points_in_circle, generate_points_asin_cell
+from .utils.geometry import (
+    generate_uniform_points_in_circle,
+    generate_points_asin_cell,
+    chaikin_smooth,
+    smooth_polygon,
+    add_edge_noise,
+)
 from .utils.math import lognorm_params_to_mean_std, intuitive_rand_lognormal
 from .utils.interpolation import LinearNDInterpolatorExt
 from .utils.encoding import one_hot_encode_array, unfold_int_matrix
+
+# Visualization
+from .viz.plotting import plot_fov, plot_expression_matrix
 
 # I/O
 from .io.dataset import generate_dataset, load_data
@@ -85,6 +95,8 @@ __all__ = [
     "ProbabilityNodeFieldRule",
     "SingleTypeRule",
     "DeterministicNeighborAssignment",
+    "DistanceBasedRule",
+    "CompositeRule",
     # Experiment
     "HybISS_Setup",
     "CellTypesProperties",
@@ -94,11 +106,17 @@ __all__ = [
     # Utilities
     "generate_uniform_points_in_circle",
     "generate_points_asin_cell",
+    "chaikin_smooth",
+    "smooth_polygon",
+    "add_edge_noise",
     "lognorm_params_to_mean_std",
     "intuitive_rand_lognormal",
     "LinearNDInterpolatorExt",
     "one_hot_encode_array",
     "unfold_int_matrix",
+    # Visualization
+    "plot_fov",
+    "plot_expression_matrix",
     # I/O
     "generate_dataset",
     "load_data",

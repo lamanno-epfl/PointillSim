@@ -1,7 +1,12 @@
 """Field of View classes."""
 
+from __future__ import annotations
+
+from typing import Callable, List, Optional, Union
+
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 
 
 class FOV:
@@ -37,13 +42,35 @@ class FOV:
         RGBA colors per cell (after CellTypesProperties.apply).
     """
 
-    def __init__(self, cell_centroids, cell_probabilities):
+    def __init__(
+        self,
+        cell_centroids: NDArray[np.floating],
+        cell_probabilities: NDArray[np.floating],
+    ) -> None:
+        # Input validation
+        cell_centroids = np.asarray(cell_centroids)
+        cell_probabilities = np.asarray(cell_probabilities)
+
+        if cell_centroids.ndim != 2 or cell_centroids.shape[1] != 2:
+            raise ValueError(
+                f"cell_centroids must have shape (n_cells, 2), got {cell_centroids.shape}"
+            )
+        if cell_probabilities.ndim != 2:
+            raise ValueError(
+                f"cell_probabilities must be 2D, got shape {cell_probabilities.shape}"
+            )
+        if cell_centroids.shape[0] != cell_probabilities.shape[0]:
+            raise ValueError(
+                f"Number of cells must match: centroids has {cell_centroids.shape[0]}, "
+                f"probabilities has {cell_probabilities.shape[0]}"
+            )
+
         self.cell_centroids = cell_centroids
         self.cell_probabilities = cell_probabilities
         self.rng = np.random.default_rng()
-        self.class_instance_one_hot = None
+        self.class_instance_one_hot: Optional[NDArray[np.integer]] = None
 
-    def realization(self):
+    def realization(self) -> None:
         """Sample hard cell type assignments from probabilities.
 
         Draws one cell type per cell from the multinomial distribution
@@ -54,11 +81,126 @@ class FOV:
         )
 
     @property
-    def class_instance(self):
+    def class_instance(self) -> NDArray[np.integer]:
         """np.ndarray: Integer cell type indices from one-hot encoding."""
         return np.argmax(self.class_instance_one_hot, axis=1)
 
-    def make_pandas_df(self):
+    @property
+    def n_cells(self) -> int:
+        """int: Number of cells in the FOV."""
+        return self.cell_centroids.shape[0]
+
+    @property
+    def n_cell_types(self) -> int:
+        """int: Number of cell types."""
+        return self.cell_probabilities.shape[1]
+
+    def add_noise(
+        self,
+        position_std: float = 1.0,
+        probability_std: float = 0.0,
+        seed: Optional[int] = None,
+    ) -> FOV:
+        """Add Gaussian noise to cell positions and/or probabilities.
+
+        Parameters
+        ----------
+        position_std : float, optional
+            Standard deviation of position noise in pixels. Default 1.0.
+        probability_std : float, optional
+            Standard deviation of probability noise (before renormalization).
+            Default 0.0 (no probability noise).
+        seed : int, optional
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        FOV
+            Self for method chaining.
+        """
+        rng = np.random.default_rng(seed)
+
+        if position_std > 0:
+            self.cell_centroids = self.cell_centroids + rng.normal(
+                0, position_std, self.cell_centroids.shape
+            )
+
+        if probability_std > 0:
+            noise = rng.normal(0, probability_std, self.cell_probabilities.shape)
+            noisy_probs = self.cell_probabilities + noise
+            noisy_probs = np.maximum(noisy_probs, 1e-12)
+            self.cell_probabilities = noisy_probs / noisy_probs.sum(
+                axis=1, keepdims=True
+            )
+
+        return self
+
+    def subsample(
+        self,
+        fraction: Optional[float] = None,
+        n_cells: Optional[int] = None,
+        seed: Optional[int] = None,
+    ) -> FOV:
+        """Randomly subsample cells from the FOV.
+
+        Parameters
+        ----------
+        fraction : float, optional
+            Fraction of cells to keep (0-1). Mutually exclusive with n_cells.
+        n_cells : int, optional
+            Exact number of cells to keep. Mutually exclusive with fraction.
+        seed : int, optional
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        FOV
+            Self with subsampled cells (for method chaining).
+
+        Raises
+        ------
+        ValueError
+            If neither or both fraction and n_cells are specified.
+        """
+        if (fraction is None) == (n_cells is None):
+            raise ValueError("Specify exactly one of 'fraction' or 'n_cells'")
+
+        rng = np.random.default_rng(seed)
+        total = self.cell_centroids.shape[0]
+
+        if fraction is not None:
+            n_keep = int(total * fraction)
+        else:
+            n_keep = min(n_cells, total)
+
+        if n_keep >= total:
+            return self
+
+        indices = rng.choice(total, size=n_keep, replace=False)
+        indices = np.sort(indices)
+
+        self.cell_centroids = self.cell_centroids[indices]
+        self.cell_probabilities = self.cell_probabilities[indices]
+
+        if self.class_instance_one_hot is not None:
+            self.class_instance_one_hot = self.class_instance_one_hot[indices]
+
+        # Also subsample morphological properties if they exist
+        for attr in [
+            "cell_minor_axis",
+            "cell_major_axis",
+            "cell_rotation",
+            "cell_rna_concentration",
+        ]:
+            if hasattr(self, attr):
+                setattr(self, attr, getattr(self, attr)[indices])
+
+        if hasattr(self, "cell_colors"):
+            self.cell_colors = [self.cell_colors[i] for i in indices]
+
+        return self
+
+    def make_pandas_df(self) -> pd.DataFrame:
         """Export FOV data as a pandas DataFrame.
 
         Returns
@@ -139,19 +281,21 @@ class FOVDistribution:
 
     def __init__(
         self,
-        frame_size=5000,
-        background_element=None,
-        other_elements=None,
-        elements_frequency=None,
-        attempts_at_elements=1,
-    ):
+        frame_size: int = 5000,
+        background_element: Optional[Callable] = None,
+        other_elements: Optional[List[Callable]] = None,
+        elements_frequency: Optional[List[float]] = None,
+        attempts_at_elements: Union[int, List[int]] = 1,
+    ) -> None:
         self.frame_size = frame_size
         self.background_element = background_element
-        self.other_elements = other_elements
-        self.elements_frequency = elements_frequency
+        self.other_elements = other_elements if other_elements is not None else []
+        self.elements_frequency = (
+            elements_frequency if elements_frequency is not None else []
+        )
         self.attempts_at_elements = attempts_at_elements
 
-    def generate_fov(self):
+    def generate_fov(self) -> FOV:
         """Generate a single FOV realization.
 
         Creates a background element, then attempts to place foreground elements

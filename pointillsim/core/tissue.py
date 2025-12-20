@@ -1,9 +1,14 @@
 """Tissue and expression profile classes."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Union
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from numpy.typing import NDArray
 from shapely.geometry import Polygon, Point
 
 from ..utils.math import intuitive_rand_lognormal
@@ -31,18 +36,77 @@ class TissueCellTypes:
         Gene colors for visualization.
     """
 
-    def __init__(self, gene_expression_by_type=None):
+    def __init__(
+        self, gene_expression_by_type: Optional[NDArray[np.floating]] = None
+    ) -> None:
         self.gene_expression_by_type = gene_expression_by_type
-        self.concentration = None
+        self.concentration: Optional[float] = None
+        self._cell_type_names: Optional[List[str]] = None
+        self._gene_names: Optional[List[str]] = None
+        self.colordict: Dict[int, Tuple] = {}
+        self.gene_colordict: Dict[int, Tuple] = {}
+
+    @classmethod
+    def load_from_csv(
+        cls,
+        filepath: str,
+        gene_col: Optional[str] = None,
+        transpose: bool = False,
+    ) -> TissueCellTypes:
+        """Load expression profiles from a CSV file.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to CSV file with expression matrix.
+        gene_col : str, optional
+            Column name containing gene names. If None, uses index.
+        transpose : bool, optional
+            If True, transpose the matrix (rows become columns).
+            Use when file has genes as columns and cell types as rows.
+
+        Returns
+        -------
+        TissueCellTypes
+            Instance with loaded expression matrix.
+
+        Examples
+        --------
+        >>> tissue = TissueCellTypes.load_from_csv("expression.csv")
+        >>> tissue = TissueCellTypes.load_from_csv("expression.csv", transpose=True)
+        """
+        df = pd.read_csv(filepath, index_col=0 if gene_col is None else None)
+
+        if gene_col is not None:
+            df = df.set_index(gene_col)
+
+        if transpose:
+            df = df.T
+
+        instance = cls(gene_expression_by_type=df.values.astype(float))
+        instance._gene_names = list(df.index)
+        instance._cell_type_names = list(df.columns)
+
+        n_genes = len(instance._gene_names)
+        n_cell_types = len(instance._cell_type_names)
+
+        instance.colordict = {
+            i: plt.cm.turbo(float(i) / n_cell_types) for i in range(n_cell_types)
+        }
+        instance.gene_colordict = {
+            i: plt.cm.turbo(float(i) / n_genes) for i in range(n_genes)
+        }
+
+        return instance
 
     def generate_types_and_markers(
         self,
-        n_genes,
-        n_cell_types,
-        expected_level=8.0,
-        expected_std_level=3.0,
-        concentration=0.90,
-    ):
+        n_genes: int,
+        n_cell_types: int,
+        expected_level: float = 8.0,
+        expected_std_level: float = 3.0,
+        concentration: float = 0.90,
+    ) -> NDArray[np.floating]:
         """Generate random gene expression profiles with marker gene patterns.
 
         Creates a sparse expression matrix where each gene is predominantly
@@ -109,13 +173,17 @@ class TissueCellTypes:
         return self.gene_expression_by_type.shape[0]
 
     @property
-    def cell_type_names(self):
-        """np.ndarray: Default cell type names ('Type 0', 'Type 1', ...)."""
+    def cell_type_names(self) -> NDArray[np.str_]:
+        """np.ndarray: Cell type names (custom if loaded, else 'Type 0', ...)."""
+        if self._cell_type_names is not None:
+            return np.array(self._cell_type_names)
         return np.array([f"Type {i}" for i in range(self.n_cell_types)])
 
     @property
-    def gene_names(self):
-        """np.ndarray: Default gene names ('Gene 0', 'Gene 1', ...)."""
+    def gene_names(self) -> NDArray[np.str_]:
+        """np.ndarray: Gene names (custom if loaded, else 'Gene 0', ...)."""
+        if self._gene_names is not None:
+            return np.array(self._gene_names)
         return np.array([f"Gene {i}" for i in range(self.n_genes)])
 
     def make_pandas_df(self):

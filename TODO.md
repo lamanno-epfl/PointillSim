@@ -8,26 +8,26 @@
 - [ ] **BranchingStructure**: For tree-like structures (e.g., ductal networks, vasculature)
 
 ### Cell Type Rules
-- [ ] **DistanceBasedRule**: Assign cell types based on distance from element boundary or center
+- [x] **DistanceBasedRule**: Assign cell types based on distance from element boundary or center
 - [ ] **LayerRule**: Assign types based on radial position (for concentric layer patterns)
 - [ ] **GradientRule**: Create smooth linear gradients across elements
-- [ ] **CompositeRule**: Explicit class for combining multiple rules with configurable weights
+- [x] **CompositeRule**: Explicit class for combining multiple rules with configurable weights
 
 ### FOV and Expression
-- [ ] **FOV.add_noise()**: Method to add realistic noise to cell positions
-- [ ] **FOV.subsample()**: Method to randomly subsample cells (for sparse simulations)
-- [ ] **TissueCellTypes.load_from_csv()**: Load real expression profiles from file
+- [x] **FOV.add_noise()**: Method to add realistic noise to cell positions
+- [x] **FOV.subsample()**: Method to randomly subsample cells (for sparse simulations)
+- [x] **TissueCellTypes.load_from_csv()**: Load real expression profiles from file
 - [ ] **TissueCellTypes.load_from_anndata()**: Load expression profiles from AnnData objects
 
 ## Medium Priority - Usability Improvements
 
 ### Polygon Smoothing & Visual Realism
-- [ ] **Bevel/Node Smoothing**: Implement smoothing options for polygonal structures to reduce the "angular" appearance
+- [x] **Bevel/Node Smoothing**: Implement smoothing options for polygonal structures to reduce the "angular" appearance
   - Add Chaikin's corner cutting algorithm or B-spline smoothing
   - Configurable smoothing iterations parameter
   - Option to smooth only vertices above a threshold angle
   - Similar to Adobe Illustrator's "Smooth" path operation
-- [ ] **Edge Softening**: Add natural variation to polygon edges (slight noise/perturbation)
+- [x] **Edge Softening**: Add natural variation to polygon edges (slight noise/perturbation)
 
 ### Simulation Modes
 - [ ] **Two Modes of Operation**: Support both random FOV generation and larger tissue simulation
@@ -40,9 +40,9 @@
 - [ ] **TissueSlice.extract_fov(x, y, size)**: Extract a FOV from a specific location
 
 ### Visualization
-- [ ] **plot_fov()**: Convenience function to visualize a FOV with multiple panels
+- [x] **plot_fov()**: Convenience function to visualize a FOV with multiple panels
 - [ ] **plot_tissue_slice()**: Visualization for TissueSlice with region boundaries
-- [ ] **plot_expression_matrix()**: Heatmap visualization for TissueCellTypes
+- [x] **plot_expression_matrix()**: Heatmap visualization for TissueCellTypes
 - [ ] **plot_probability_field()**: Visualization for ProbabilityNodeFieldRule fields
   - Render the underlying probability/logits field as a heatmap or contour plot
   - Show node locations and interpolated probabilities
@@ -126,9 +126,9 @@
 - [ ] **Benchmark Notebook**: Compare simulated vs. real data statistics
 
 ### CI & Testing
-- [ ] **GitHub Actions CI**: Automated testing pipeline
+- [x] **GitHub Actions CI**: Automated testing pipeline
   - Run unit tests on push/PR
-  - Test across Python versions (3.8, 3.9, 3.10, 3.11)
+  - Test across Python versions (3.9, 3.10, 3.11, 3.12)
   - Coverage reporting
 - [ ] **Pre-commit Hooks**: Code quality checks
   - Linting (ruff/flake8)
@@ -157,8 +157,8 @@
 
 ### Refactoring
 - [x] Split `data_simulations.py` into focused modules (see module structure below)
-- [ ] Add type hints throughout codebase
-- [ ] Add input validation to constructors
+- [x] Add type hints throughout codebase
+- [x] Add input validation to constructors
 - [ ] Remove duplicate `SingleTypeRule` class definition (lines 339 and 1469)
 - [ ] Fix `FrameWideUpdater` one-time-use limitation
 
@@ -184,10 +184,11 @@ pointillsim/
 │   └── structures.py     # VacuolatedStructure, (future: LinearLumen, etc.)
 ├── rules/
 │   ├── __init__.py
-│   ├── base.py           # CellTypeRuleBase
+│   ├── base.py           # CellTypeRuleBase, DummyRule
 │   ├── random.py         # RandomCellTypeRule, MixOfNCellTypesRule
 │   ├── spatial.py        # ProbabilityNodeFieldRule, SingleTypeRule
-│   └── neighbor.py       # DeterministicNeighborAssignment
+│   ├── neighbor.py       # DeterministicNeighborAssignment
+│   └── composite.py      # DistanceBasedRule, CompositeRule
 ├── experiment/
 │   ├── __init__.py
 │   ├── hybiss.py         # HybISS_Setup
@@ -195,10 +196,13 @@ pointillsim/
 │   └── transfer.py       # TransferFunctionBase, AffineNonNegTransfer, IdentityTransfer
 ├── utils/
 │   ├── __init__.py
-│   ├── geometry.py       # generate_uniform_points_in_circle, generate_points_asin_cell
+│   ├── geometry.py       # chaikin_smooth, smooth_polygon, add_edge_noise, generate_*
 │   ├── math.py           # lognorm_params_to_mean_std, intuitive_rand_lognormal
 │   ├── interpolation.py  # LinearNDInterpolatorExt
 │   └── encoding.py       # one_hot_encode_array, unfold_int_matrix
+├── viz/
+│   ├── __init__.py
+│   └── plotting.py       # plot_fov, plot_expression_matrix
 └── io/
     ├── __init__.py
     └── dataset.py        # generate_dataset, load_data

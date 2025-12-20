@@ -2,6 +2,8 @@
 
 Rule-based Simulation Engine for Imaging-based Spatial Transcriptomics
 
+![PointillSim Example Output](tests/visual_outputs/test_complete_simulation.png)
+
 ## Overview
 
 PointillSim creates realistic synthetic Fields of View (FOVs) for imaging-based spatial transcriptomics experiments, specifically **HybISS** (Hybridization-based In Situ Sequencing). It generates ground truth cell-type annotations and spatial gene expression data as dots within cells, enabling benchmarking and validation of spatial transcriptomics analysis methods.

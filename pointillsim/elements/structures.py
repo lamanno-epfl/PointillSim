@@ -1024,3 +1024,468 @@ class LayeredElement:
             probs = np.empty((n_cells, n_types))
 
         return probs
+
+
+class BranchingStructure:
+    """Tree-like branching histological structure.
+
+    Represents branching tissue architectures such as vascular trees,
+    neural dendrites, bronchial airways, or ductal systems. The structure
+    starts from a root point and recursively branches into smaller segments.
+
+    Each branch is a tube with configurable radius that can decrease with
+    depth. Cells are generated in the tube walls, and cell type rules can
+    be applied based on branch depth or position within the wall.
+
+    Parameters
+    ----------
+    frame_size : int, optional
+        Size of the FOV in pixels. Default is 5000.
+    root_position : np.ndarray, optional
+        Starting position (x, y) of the tree root. If None, placed at frame edge.
+    root_angle : float, optional
+        Initial growth angle in radians. If None, grows toward center.
+    root_radius : float, optional
+        Radius of the main trunk. Default is 40.
+    wall_thickness : float, optional
+        Wall thickness as fraction of radius. Default is 0.4.
+    branch_length : float, optional
+        Length of each branch segment. Default is 150.
+    branch_length_decay : float, optional
+        Factor by which branch length decreases each generation. Default is 0.8.
+    radius_decay : float, optional
+        Factor by which radius decreases each generation. Default is 0.7.
+    branching_angle : tuple, optional
+        Range of branching angles in radians (min, max). Default is (0.3, 0.7).
+    branching_probability : float, optional
+        Probability of branching at each generation. Default is 0.8.
+    max_depth : int, optional
+        Maximum branching depth. Default is 4.
+    min_radius : float, optional
+        Minimum branch radius (stops branching below this). Default is 5.
+    tipical_cell_spacing : float, optional
+        Average cell spacing. Default is 8.
+    curvature : float, optional
+        Random curvature of branches. Default is 0.1.
+    rules : CellTypeRuleBase or list
+        Rules for cell type assignment. Required.
+
+    Attributes
+    ----------
+    polygon : shapely.Polygon
+        Union of all branch polygons.
+    lumen : shapely.Polygon
+        Union of all branch lumens.
+    branches : list
+        List of branch dictionaries with 'start', 'end', 'radius', 'depth'.
+    cell_centroids : np.ndarray
+        Cell centroid positions.
+    branch_depths : np.ndarray
+        Branching depth for each cell (useful for depth-based rules).
+
+    Examples
+    --------
+    >>> from pointillsim.rules import LayerRule
+    >>> rule = LayerRule(n_cell_types=3, layer_types=[0, 1, 2])
+    >>> tree = BranchingStructure(
+    ...     frame_size=1000,
+    ...     root_radius=30,
+    ...     max_depth=3,
+    ...     rules=rule,
+    ... )
+    >>> realized = tree.generate()
+    >>> print(f"Generated tree with {len(realized.branches)} branches")
+    """
+
+    def __init__(
+        self,
+        frame_size: int = 5000,
+        root_position: Optional[NDArray[np.floating]] = None,
+        root_angle: Optional[float] = None,
+        root_radius: float = 40,
+        wall_thickness: float = 0.4,
+        branch_length: float = 150,
+        branch_length_decay: float = 0.8,
+        radius_decay: float = 0.7,
+        branching_angle: Tuple[float, float] = (0.3, 0.7),
+        branching_probability: float = 0.8,
+        max_depth: int = 4,
+        min_radius: float = 5,
+        tipical_cell_spacing: float = 8,
+        curvature: float = 0.1,
+        rules=None,
+    ) -> None:
+        if rules is None:
+            raise ValueError("No rules provided")
+
+        self.frame_size = frame_size
+        self.root_position = root_position
+        self.root_angle = root_angle
+        self.root_radius = root_radius
+        self.wall_thickness_ratio = wall_thickness
+        self.branch_length = branch_length
+        self.branch_length_decay = branch_length_decay
+        self.radius_decay = radius_decay
+        self.branching_angle = branching_angle
+        self.branching_probability = branching_probability
+        self.max_depth = max_depth
+        self.min_radius = min_radius
+        self.tipical_cell_spacing = tipical_cell_spacing
+        self.curvature = curvature
+
+        self.rules = rules if isinstance(rules, list) else [rules]
+        self.original_rules = self.rules
+
+        self.polygon = None
+        self.lumen = None
+        self.branches = []
+        self.cell_centroids = None
+        self.cell_probabilities = None
+        self.branch_depths = None
+
+        self.rng = np.random.default_rng(seed=int(time.time() * 1e6))
+        self._class_instance_one_hot = None
+
+    @property
+    def scale(self) -> float:
+        """float: Effective scale for rule compatibility."""
+        return self.root_radius
+
+    @property
+    def center(self) -> NDArray[np.floating]:
+        """np.ndarray: Center of the structure (centroid of polygon)."""
+        if self.polygon is not None:
+            return np.array([[self.polygon.centroid.x, self.polygon.centroid.y]])
+        return np.array([[self.frame_size / 2, self.frame_size / 2]])
+
+    @property
+    def wall_thickness(self) -> float:
+        """float: Wall thickness of root branch."""
+        return self.root_radius * self.wall_thickness_ratio
+
+    def generate(self, **kwargs) -> "BranchingStructure":
+        """Generate a new realization of this branching structure.
+
+        Returns
+        -------
+        BranchingStructure
+            A new instance with generated geometry and cells.
+        """
+        other = copy.deepcopy(self)
+        other.polygon = None
+        other.lumen = None
+        other.branches = []
+        other.cell_centroids = None
+        other.cell_probabilities = None
+        other.branch_depths = None
+        other._class_instance_one_hot = None
+        other.rules = other.original_rules
+
+        # Generate tree structure
+        other._generate_tree()
+
+        # Generate polygons from branches
+        other.polygon, other.lumen = other._generate_polygons()
+
+        # Generate cells
+        other.cell_centroids, other.branch_depths = other._generate_cells()
+
+        # Apply rules
+        other.rules = [r.adapt_rule_to_element(other) for r in other.rules]
+        other.cell_probabilities = other.apply_rules(other.rules)
+
+        return other
+
+    def _generate_tree(self) -> None:
+        """Generate the branching tree structure recursively."""
+        # Determine root position
+        if self.root_position is not None:
+            start = np.asarray(self.root_position).flatten()[:2]
+        else:
+            # Place at edge of frame, pointing inward
+            edge = np.random.choice(['left', 'right', 'top', 'bottom'])
+            margin = self.root_radius * 2
+            if edge == 'left':
+                start = np.array([margin, np.random.uniform(margin, self.frame_size - margin)])
+            elif edge == 'right':
+                start = np.array([self.frame_size - margin, np.random.uniform(margin, self.frame_size - margin)])
+            elif edge == 'top':
+                start = np.array([np.random.uniform(margin, self.frame_size - margin), margin])
+            else:  # bottom
+                start = np.array([np.random.uniform(margin, self.frame_size - margin), self.frame_size - margin])
+
+        # Determine root angle
+        if self.root_angle is not None:
+            angle = self.root_angle
+        else:
+            # Point toward center
+            center = np.array([self.frame_size / 2, self.frame_size / 2])
+            direction = center - start
+            angle = np.arctan2(direction[1], direction[0])
+
+        # Recursively generate branches
+        self._grow_branch(start, angle, self.root_radius, self.branch_length, depth=0)
+
+    def _grow_branch(
+        self,
+        start: NDArray[np.floating],
+        angle: float,
+        radius: float,
+        length: float,
+        depth: int,
+    ) -> None:
+        """Recursively grow a branch and its children.
+
+        Parameters
+        ----------
+        start : np.ndarray
+            Starting position of the branch.
+        angle : float
+            Growth direction in radians.
+        radius : float
+            Branch radius.
+        length : float
+            Branch length.
+        depth : int
+            Current branching depth.
+        """
+        if depth > self.max_depth or radius < self.min_radius:
+            return
+
+        # Add curvature
+        angle_variation = np.random.uniform(-self.curvature, self.curvature) * np.pi
+
+        # Calculate end point
+        direction = np.array([np.cos(angle + angle_variation), np.sin(angle + angle_variation)])
+        end = start + direction * length
+
+        # Check bounds
+        if not (0 < end[0] < self.frame_size and 0 < end[1] < self.frame_size):
+            return
+
+        # Store this branch
+        self.branches.append({
+            'start': start.copy(),
+            'end': end.copy(),
+            'radius': radius,
+            'depth': depth,
+            'angle': angle,
+        })
+
+        # Determine if we branch
+        if np.random.random() < self.branching_probability:
+            # Two child branches
+            new_length = length * self.branch_length_decay
+            new_radius = radius * self.radius_decay
+
+            # Left branch
+            left_angle = angle + np.random.uniform(*self.branching_angle)
+            self._grow_branch(end, left_angle, new_radius, new_length, depth + 1)
+
+            # Right branch
+            right_angle = angle - np.random.uniform(*self.branching_angle)
+            self._grow_branch(end, right_angle, new_radius, new_length, depth + 1)
+        else:
+            # Continue straight (with slight variation)
+            new_length = length * self.branch_length_decay
+            new_radius = radius * self.radius_decay
+            self._grow_branch(end, angle, new_radius, new_length, depth + 1)
+
+    def _generate_polygons(self) -> Tuple[Polygon, Polygon]:
+        """Generate outer and lumen polygons from branches.
+
+        Returns
+        -------
+        tuple
+            (outer_polygon, lumen_polygon)
+        """
+        if not self.branches:
+            # Return empty polygons
+            return Polygon(), Polygon()
+
+        outer_parts = []
+        lumen_parts = []
+
+        for branch in self.branches:
+            line = LineString([branch['start'], branch['end']])
+            outer_radius = branch['radius']
+            inner_radius = outer_radius * (1 - self.wall_thickness_ratio)
+
+            outer = line.buffer(outer_radius, cap_style=1, resolution=8)
+            inner = line.buffer(max(inner_radius, 1), cap_style=1, resolution=8)
+
+            outer_parts.append(outer)
+            lumen_parts.append(inner)
+
+        # Union all parts
+        outer_polygon = unary_union(outer_parts)
+        lumen_polygon = unary_union(lumen_parts)
+
+        # Apply smoothing
+        outer_polygon = smooth_polygon(outer_polygon, iterations=1, preserve_area=True)
+        lumen_polygon = smooth_polygon(lumen_polygon, iterations=1, preserve_area=True)
+
+        return outer_polygon, lumen_polygon
+
+    def _generate_cells(self) -> Tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Generate cell centroids in the branch walls.
+
+        Returns
+        -------
+        tuple
+            (cell_centroids, branch_depths)
+        """
+        if not self.branches or self.polygon.is_empty:
+            return np.empty((0, 2)), np.empty(0, dtype=int)
+
+        # Generate grid points
+        bounds = self.polygon.bounds
+        x = np.arange(bounds[0], bounds[2], self.tipical_cell_spacing)
+        y = np.arange(bounds[1], bounds[3], self.tipical_cell_spacing * np.sin(np.pi / 3))
+        X, Y = np.meshgrid(x, y)
+        X[::2] += self.tipical_cell_spacing / 2.0
+        points = np.stack((X.flatten(), Y.flatten()), axis=1)
+
+        # Keep points in wall (inside outer, outside lumen)
+        inside_outer = np.array([
+            self.polygon.contains(Point(p[0], p[1])) for p in points
+        ])
+        inside_lumen = np.array([
+            self.lumen.contains(Point(p[0], p[1])) for p in points
+        ])
+        mask = inside_outer & ~inside_lumen
+        points = points[mask]
+
+        # Add jitter
+        points += np.random.normal(0, self.tipical_cell_spacing / 5.0, points.shape)
+
+        # Assign branch depth to each cell
+        depths = self._assign_branch_depths(points)
+
+        return points, depths
+
+    def _assign_branch_depths(self, points: NDArray[np.floating]) -> NDArray[np.integer]:
+        """Assign branching depth to each cell based on nearest branch.
+
+        Parameters
+        ----------
+        points : np.ndarray
+            Cell centroid positions.
+
+        Returns
+        -------
+        np.ndarray
+            Branch depth for each cell.
+        """
+        depths = np.zeros(len(points), dtype=int)
+
+        for i, point in enumerate(points):
+            min_dist = float('inf')
+            best_depth = 0
+
+            for branch in self.branches:
+                line = LineString([branch['start'], branch['end']])
+                dist = line.distance(Point(point[0], point[1]))
+
+                if dist < min_dist:
+                    min_dist = dist
+                    best_depth = branch['depth']
+
+            depths[i] = best_depth
+
+        return depths
+
+    @property
+    def bounding_box(self) -> Tuple[float, float, float, float]:
+        """tuple: Bounding box of the polygon."""
+        if self.polygon is not None and not self.polygon.is_empty:
+            return self.polygon.bounds
+        return (0, 0, self.frame_size, self.frame_size)
+
+    @property
+    def class_instance(self) -> NDArray[np.integer]:
+        """np.ndarray: Sampled cell type indices."""
+        return np.argmax(self.class_instance_one_hot, axis=1)
+
+    @property
+    def class_instance_one_hot(self) -> NDArray[np.integer]:
+        """np.ndarray: One-hot encoded sampled cell types."""
+        if self._class_instance_one_hot is None:
+            if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+                self._class_instance_one_hot = self.rng.multinomial(
+                    n=1, pvals=self.cell_probabilities
+                )
+            else:
+                self._class_instance_one_hot = np.empty((0, 0), dtype=int)
+        return self._class_instance_one_hot
+
+    @property
+    def ML_class(self) -> NDArray[np.integer]:
+        """np.ndarray: Maximum likelihood cell type."""
+        if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+            return np.argmax(self.cell_probabilities, axis=1)
+        return np.empty(0, dtype=int)
+
+    def is_inside(
+        self, points: NDArray[np.floating], consider_lumen: bool = False
+    ) -> NDArray[np.bool_]:
+        """Check which points are inside the structure."""
+        if consider_lumen:
+            result = []
+            for point in points:
+                px = Point(point[0], point[1])
+                result.append(
+                    self.polygon.contains(px) and not self.lumen.contains(px)
+                )
+            return np.array(result, dtype=bool)
+        else:
+            return np.array(
+                [self.polygon.contains(Point(p[0], p[1])) for p in points],
+                dtype=bool
+            )
+
+    def is_outside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are outside the structure."""
+        return ~self.is_inside(points)
+
+    def remove_cells(self, bool_ix: NDArray[np.bool_]) -> None:
+        """Remove cells at specified indices."""
+        self.cell_centroids = self.cell_centroids[~bool_ix]
+        self.cell_probabilities = self.cell_probabilities[~bool_ix]
+        if self.branch_depths is not None:
+            self.branch_depths = self.branch_depths[~bool_ix]
+
+    def apply_rules(self, rules) -> NDArray[np.floating]:
+        """Apply rules to compute cell type probabilities."""
+        if self.cell_centroids is None or len(self.cell_centroids) == 0:
+            return np.empty((0, rules[0].n_cell_types if rules else 0))
+
+        probs = None
+        for rule in rules:
+            probs = rule.apply(self.cell_centroids, current_probs=probs)
+
+        if probs is None:
+            n_cells = self.cell_centroids.shape[0]
+            n_types = rules[0].n_cell_types if rules else 0
+            probs = np.empty((n_cells, n_types))
+
+        return probs
+
+    def normalized_depth(self) -> NDArray[np.floating]:
+        """Calculate normalized branching depth (0=root, 1=deepest).
+
+        Useful for depth-based cell type gradients.
+
+        Returns
+        -------
+        np.ndarray
+            Normalized depth (0-1) for each cell.
+        """
+        if self.branch_depths is None or len(self.branch_depths) == 0:
+            return np.empty(0)
+
+        max_depth = self.branch_depths.max()
+        if max_depth == 0:
+            return np.zeros_like(self.branch_depths, dtype=float)
+
+        return self.branch_depths / max_depth

@@ -2,7 +2,12 @@
 
 from .base import HistologicalElement
 from .frame import FrameWideElement, FrameWideUpdater
-from .structures import VacuolatedStructure, LinearLumenStructure, LayeredElement
+from .structures import (
+    VacuolatedStructure,
+    LinearLumenStructure,
+    LayeredElement,
+    BranchingStructure,
+)
 
 __all__ = [
     "HistologicalElement",
@@ -11,4 +16,5 @@ __all__ = [
     "VacuolatedStructure",
     "LinearLumenStructure",
     "LayeredElement",
+    "BranchingStructure",
 ]

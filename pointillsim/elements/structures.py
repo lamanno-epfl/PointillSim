@@ -630,3 +630,397 @@ class LinearLumenStructure:
         # Normalize by wall thickness
         normalized = np.clip(dist_from_lumen / self.wall_thickness, 0, 1)
         return normalized
+
+
+class LayeredElement:
+    """Stratified tissue element with horizontal layers.
+
+    Represents tissues with distinct horizontal layers such as cerebral cortex,
+    skin epidermis, or retinal layers. Each layer can have different cell type
+    compositions defined by separate rules.
+
+    The element creates a rectangular region spanning the frame width with
+    specified layer boundaries. Different rules can be assigned to each layer
+    for complete control over cell type distributions.
+
+    Parameters
+    ----------
+    frame_size : int, optional
+        Size of the FOV in pixels. Default is 5000.
+    layer_boundaries : list of float, optional
+        Y-coordinates of layer boundaries (in pixels from top). Should be
+        sorted in ascending order. Creates n+1 layers for n boundaries.
+        If None, uses [frame_size/2] for two equal layers. Default is None.
+    layer_rules : list of CellTypeRuleBase, optional
+        Rules for each layer. Must have len(layer_boundaries) + 1 rules.
+        If None, uses the default `rules` parameter for all layers.
+    margin : float, optional
+        Horizontal margin from frame edges (in pixels). Default is 0.
+    tipical_cell_spacing : float, optional
+        Average cell spacing. Default is 8.
+    orientation : str, optional
+        Layer orientation: 'horizontal' (y-axis layers) or 'vertical'
+        (x-axis layers). Default is 'horizontal'.
+    rules : CellTypeRuleBase or list, optional
+        Default rule(s) for all layers if layer_rules not specified.
+        Required if layer_rules is None.
+
+    Attributes
+    ----------
+    polygon : shapely.Polygon
+        The element's bounding polygon.
+    cell_centroids : np.ndarray
+        Cell centroid positions, shape (n_cells, 2).
+    cell_probabilities : np.ndarray
+        Cell type probabilities, shape (n_cells, n_cell_types).
+    layer_indices : np.ndarray
+        Layer index (0, 1, 2, ...) for each cell.
+
+    Examples
+    --------
+    >>> from pointillsim.rules import SingleTypeRule, MixOfNCellTypesRule
+    >>> # Create 3-layer epidermis: stratum corneum, spinosum, basale
+    >>> layer_rules = [
+    ...     SingleTypeRule(n_cell_types=3, cell_type_ix=0),  # Corneum
+    ...     MixOfNCellTypesRule(n_cell_types=3, list_N=[0, 1], proportions=[0.3, 0.7]),
+    ...     SingleTypeRule(n_cell_types=3, cell_type_ix=2),  # Basale
+    ... ]
+    >>> epidermis = LayeredElement(
+    ...     frame_size=1000,
+    ...     layer_boundaries=[200, 600],  # 3 layers
+    ...     layer_rules=layer_rules,
+    ...     tipical_cell_spacing=12,
+    ... )
+    >>> realized = epidermis.generate()
+    """
+
+    def __init__(
+        self,
+        frame_size: int = 5000,
+        layer_boundaries: Optional[list] = None,
+        layer_rules: Optional[list] = None,
+        margin: float = 0,
+        tipical_cell_spacing: float = 8,
+        orientation: str = "horizontal",
+        rules=None,
+    ) -> None:
+        self.frame_size = frame_size
+        self.margin = margin
+        self.tipical_cell_spacing = tipical_cell_spacing
+        self.orientation = orientation
+
+        # Set up layer boundaries
+        if layer_boundaries is None:
+            self.layer_boundaries = [frame_size / 2]
+        else:
+            self.layer_boundaries = sorted(layer_boundaries)
+
+        # Validate and set up rules
+        n_layers = len(self.layer_boundaries) + 1
+
+        if layer_rules is not None:
+            if len(layer_rules) != n_layers:
+                raise ValueError(
+                    f"layer_rules must have {n_layers} rules for "
+                    f"{len(self.layer_boundaries)} boundaries, got {len(layer_rules)}"
+                )
+            self.layer_rules = layer_rules
+            # Use the first layer rule as default for compatibility
+            self.rules = layer_rules[0] if not isinstance(layer_rules[0], list) else layer_rules[0]
+        elif rules is not None:
+            self.layer_rules = None
+            self.rules = rules if isinstance(rules, list) else [rules]
+        else:
+            raise ValueError("Either 'rules' or 'layer_rules' must be provided")
+
+        if not isinstance(self.rules, list):
+            self.rules = [self.rules]
+
+        self.original_rules = self.rules
+        self.original_layer_rules = self.layer_rules
+
+        self.polygon = None
+        self.cell_centroids = None
+        self.cell_probabilities = None
+        self.layer_indices = None
+
+        self.rng = np.random.default_rng(seed=int(time.time() * 1e6))
+        self._class_instance_one_hot = None
+
+    @property
+    def n_layers(self) -> int:
+        """int: Number of layers in this element."""
+        return len(self.layer_boundaries) + 1
+
+    @property
+    def scale(self) -> float:
+        """float: Effective scale for rule compatibility."""
+        return self.frame_size / 2
+
+    @property
+    def center(self) -> NDArray[np.floating]:
+        """np.ndarray: Center of the element."""
+        return np.array([[self.frame_size / 2, self.frame_size / 2]])
+
+    def generate(self, **kwargs) -> "LayeredElement":
+        """Generate a new realization of this layered element.
+
+        Returns
+        -------
+        LayeredElement
+            A new instance with generated geometry and cells.
+        """
+        other = copy.deepcopy(self)
+        other.polygon = None
+        other.cell_centroids = None
+        other.cell_probabilities = None
+        other.layer_indices = None
+        other._class_instance_one_hot = None
+        other.rules = other.original_rules
+        other.layer_rules = other.original_layer_rules
+
+        other.polygon = other._generate_polygon()
+        other.cell_centroids = other.generate_cell_centroids()
+        other.layer_indices = other._assign_layer_indices()
+        other.cell_probabilities = other._apply_layer_rules()
+        return other
+
+    def _generate_polygon(self) -> Polygon:
+        """Generate the bounding polygon for this layered element.
+
+        Returns
+        -------
+        shapely.Polygon
+            Rectangle spanning the frame (with optional margins).
+        """
+        x_min = self.margin
+        x_max = self.frame_size - self.margin
+        y_min = 0
+        y_max = self.frame_size
+
+        return Polygon([
+            (x_min, y_min),
+            (x_max, y_min),
+            (x_max, y_max),
+            (x_min, y_max),
+        ])
+
+    @property
+    def bounding_box(self) -> Tuple[float, float, float, float]:
+        """tuple: Bounding box of the polygon."""
+        return self.polygon.bounds
+
+    @property
+    def class_instance(self) -> NDArray[np.integer]:
+        """np.ndarray: Sampled cell type indices."""
+        return np.argmax(self.class_instance_one_hot, axis=1)
+
+    @property
+    def class_instance_one_hot(self) -> NDArray[np.integer]:
+        """np.ndarray: One-hot encoded sampled cell types."""
+        if self._class_instance_one_hot is None:
+            self._class_instance_one_hot = self.rng.multinomial(
+                n=1, pvals=self.cell_probabilities
+            )
+        return self._class_instance_one_hot
+
+    @property
+    def ML_class(self) -> NDArray[np.integer]:
+        """np.ndarray: Maximum likelihood cell type."""
+        return np.argmax(self.cell_probabilities, axis=1)
+
+    def is_inside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are inside the element."""
+        return np.array(
+            [self.polygon.contains(Point(p[0], p[1])) for p in points],
+            dtype=bool
+        )
+
+    def is_outside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are outside the element."""
+        return ~self.is_inside(points)
+
+    def remove_cells(self, bool_ix: NDArray[np.bool_]) -> None:
+        """Remove cells at specified indices."""
+        self.cell_centroids = self.cell_centroids[~bool_ix]
+        self.cell_probabilities = self.cell_probabilities[~bool_ix]
+        if self.layer_indices is not None:
+            self.layer_indices = self.layer_indices[~bool_ix]
+
+    def generate_cell_centroids(self) -> NDArray[np.floating]:
+        """Generate cell centroids on a quasi-hexagonal grid.
+
+        Returns
+        -------
+        np.ndarray
+            Cell centroid coordinates, shape (n_cells, 2).
+        """
+        x = np.arange(
+            self.bounding_box[0], self.bounding_box[2], self.tipical_cell_spacing
+        )
+        y = np.arange(
+            self.bounding_box[1],
+            self.bounding_box[3],
+            self.tipical_cell_spacing * np.sin(np.pi / 3),
+        )
+        X, Y = np.meshgrid(x, y)
+        X[::2] += self.tipical_cell_spacing / 2.0
+        points = np.stack((X.flatten(), Y.flatten()), axis=1)
+
+        # Keep points inside polygon
+        points = points[self.is_inside(points)]
+
+        # Add jitter
+        points += np.random.normal(0, self.tipical_cell_spacing / 5.0, points.shape)
+        return points
+
+    def _assign_layer_indices(self) -> NDArray[np.integer]:
+        """Assign each cell to a layer based on its position.
+
+        Returns
+        -------
+        np.ndarray
+            Layer index (0, 1, 2, ...) for each cell.
+        """
+        if self.orientation == "horizontal":
+            positions = self.cell_centroids[:, 1]  # Y-coordinate
+        else:
+            positions = self.cell_centroids[:, 0]  # X-coordinate
+
+        # Digitize returns indices of the bins
+        # For n boundaries, we get n+1 bins (layers)
+        indices = np.digitize(positions, self.layer_boundaries)
+        return indices
+
+    def _apply_layer_rules(self) -> NDArray[np.floating]:
+        """Apply rules to compute cell type probabilities per layer.
+
+        Returns
+        -------
+        np.ndarray
+            Cell type probability matrix, shape (n_cells, n_cell_types).
+        """
+        n_cells = self.cell_centroids.shape[0]
+
+        if self.layer_rules is not None:
+            # Determine n_cell_types from first rule
+            first_rule = self.layer_rules[0]
+            if isinstance(first_rule, list):
+                first_rule = first_rule[0]
+            n_cell_types = first_rule.n_cell_types
+
+            probs = np.zeros((n_cells, n_cell_types))
+
+            for layer_idx in range(self.n_layers):
+                mask = self.layer_indices == layer_idx
+
+                if not np.any(mask):
+                    continue
+
+                layer_rule = self.layer_rules[layer_idx]
+                if not isinstance(layer_rule, list):
+                    layer_rule = [layer_rule]
+
+                # Adapt rules to this element
+                adapted_rules = [r.adapt_rule_to_element(self) for r in layer_rule]
+
+                # Get cell positions for this layer
+                layer_points = self.cell_centroids[mask]
+
+                # Apply rules
+                layer_probs = None
+                for rule in adapted_rules:
+                    layer_probs = rule.apply(layer_points, current_probs=layer_probs)
+
+                probs[mask] = layer_probs
+
+            return probs
+        else:
+            # Use default rules for all layers
+            adapted_rules = [r.adapt_rule_to_element(self) for r in self.rules]
+            probs = None
+            for rule in adapted_rules:
+                probs = rule.apply(self.cell_centroids, current_probs=probs)
+
+            if probs is None:
+                n_types = self.rules[0].n_cell_types if self.rules else 0
+                probs = np.empty((n_cells, n_types))
+
+            return probs
+
+    def get_layer_boundary_y(self, layer_idx: int) -> Tuple[float, float]:
+        """Get the Y-coordinate boundaries for a specific layer.
+
+        Parameters
+        ----------
+        layer_idx : int
+            Layer index (0 to n_layers - 1).
+
+        Returns
+        -------
+        tuple
+            (y_min, y_max) boundaries for the layer.
+        """
+        if layer_idx < 0 or layer_idx >= self.n_layers:
+            raise ValueError(f"layer_idx must be 0 to {self.n_layers - 1}")
+
+        all_boundaries = [0] + list(self.layer_boundaries) + [self.frame_size]
+        return (all_boundaries[layer_idx], all_boundaries[layer_idx + 1])
+
+    def normalized_layer_position(
+        self, points: Optional[NDArray[np.floating]] = None
+    ) -> NDArray[np.floating]:
+        """Calculate normalized position within each layer (0=top, 1=bottom).
+
+        Useful for creating gradients within layers.
+
+        Parameters
+        ----------
+        points : np.ndarray, optional
+            Point coordinates. If None, uses cell_centroids.
+
+        Returns
+        -------
+        np.ndarray
+            Normalized position (0-1) within each point's layer.
+        """
+        if points is None:
+            points = self.cell_centroids
+
+        if self.orientation == "horizontal":
+            positions = points[:, 1]
+        else:
+            positions = points[:, 0]
+
+        layer_indices = np.digitize(positions, self.layer_boundaries)
+        all_boundaries = [0] + list(self.layer_boundaries) + [self.frame_size]
+
+        normalized = np.zeros(len(positions))
+        for i in range(len(positions)):
+            layer_idx = layer_indices[i]
+            y_min = all_boundaries[layer_idx]
+            y_max = all_boundaries[layer_idx + 1]
+            layer_thickness = y_max - y_min
+            if layer_thickness > 0:
+                normalized[i] = (positions[i] - y_min) / layer_thickness
+            else:
+                normalized[i] = 0.5
+
+        return np.clip(normalized, 0, 1)
+
+    def apply_rules(self, rules) -> NDArray[np.floating]:
+        """Apply rules to compute cell type probabilities.
+
+        This is a compatibility method. For layer-specific rules,
+        use layer_rules parameter in constructor.
+        """
+        probs = None
+        for rule in rules:
+            probs = rule.apply(self.cell_centroids, current_probs=probs)
+
+        if probs is None:
+            n_cells = self.cell_centroids.shape[0]
+            n_types = rules[0].n_cell_types if rules else 0
+            probs = np.empty((n_cells, n_types))
+
+        return probs

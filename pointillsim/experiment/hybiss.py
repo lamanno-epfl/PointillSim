@@ -161,3 +161,198 @@ class HybISS_Setup:
                 "cell": pd.Series(cell_ixs, dtype=int),
             }
         )
+
+    def save_config(self, filepath: str, format: str = 'auto'):
+        """Save experiment configuration to a file.
+
+        Saves all experiment parameters including gene sensitivities,
+        transfer function settings, and tissue expression profiles.
+        This allows reproducing the exact experimental setup.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to save the configuration.
+        format : str, optional
+            File format: 'json', 'yaml', 'npz', or 'auto' (from extension).
+            Default 'auto'.
+
+        Notes
+        -----
+        - 'json': Human-readable, editable, recommended for configuration
+        - 'yaml': Human-readable, requires pyyaml
+        - 'npz': NumPy format, includes all numerical data
+
+        Examples
+        --------
+        >>> hybiss.save_config('experiment_config.json')
+        >>> hybiss.save_config('experiment.yaml')
+        """
+        if format == 'auto':
+            if filepath.endswith('.json'):
+                format = 'json'
+            elif filepath.endswith('.yaml') or filepath.endswith('.yml'):
+                format = 'yaml'
+            elif filepath.endswith('.npz'):
+                format = 'npz'
+            else:
+                format = 'json'
+
+        config = self._build_config_dict()
+
+        if format == 'json':
+            self._save_json(filepath, config)
+        elif format == 'yaml':
+            self._save_yaml(filepath, config)
+        elif format == 'npz':
+            self._save_npz(filepath, config)
+        else:
+            raise ValueError(f"Unknown format: {format}")
+
+    def _build_config_dict(self):
+        """Build configuration dictionary."""
+        config = {
+            'experiment_type': 'HybISS',
+            'n_genes': int(self.M.shape[0]),
+            'n_cell_types': int(self.M.shape[1]),
+            'gene_names': self.tissue.gene_names.tolist() if hasattr(self.tissue.gene_names, 'tolist') else list(self.tissue.gene_names),
+            'cell_type_names': self.tissue.cell_type_names.tolist() if hasattr(self.tissue.cell_type_names, 'tolist') else list(self.tissue.cell_type_names),
+            'genes_sensitivities': self.genes_sensitivities.tolist(),
+            'genes_sensitivities_variation': self.genes_sensitivities_variation.tolist(),
+            'transfer_function': {
+                'type': self.transfer_function.__class__.__name__,
+            },
+            'expression_matrix': self.raw_M.tolist(),
+        }
+
+        # Add transfer function parameters if available
+        if hasattr(self.transfer_function, 'scale'):
+            config['transfer_function']['scale'] = float(self.transfer_function.scale)
+        if hasattr(self.transfer_function, 'offset'):
+            config['transfer_function']['offset'] = float(self.transfer_function.offset)
+
+        return config
+
+    def _save_json(self, filepath: str, config: dict):
+        """Save to JSON format."""
+        import json
+        with open(filepath, 'w') as f:
+            json.dump(config, f, indent=2)
+
+    def _save_yaml(self, filepath: str, config: dict):
+        """Save to YAML format."""
+        import yaml
+        with open(filepath, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+    def _save_npz(self, filepath: str, config: dict):
+        """Save to NPZ format with arrays."""
+        np.savez_compressed(
+            filepath,
+            n_genes=np.array([config['n_genes']]),
+            n_cell_types=np.array([config['n_cell_types']]),
+            gene_names=np.array(config['gene_names']),
+            cell_type_names=np.array(config['cell_type_names']),
+            genes_sensitivities=np.array(config['genes_sensitivities']),
+            genes_sensitivities_variation=np.array(config['genes_sensitivities_variation']),
+            expression_matrix=np.array(config['expression_matrix']),
+            transfer_function_type=np.array([config['transfer_function']['type']]),
+        )
+
+    @classmethod
+    def load_config(cls, filepath: str, format: str = 'auto'):
+        """Load experiment configuration from a file.
+
+        Reconstructs a HybISS_Setup from saved configuration.
+        Requires recreating the tissue object from saved expression data.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to the configuration file.
+        format : str, optional
+            File format: 'json', 'yaml', 'npz', or 'auto'.
+            Default 'auto'.
+
+        Returns
+        -------
+        HybISS_Setup
+            Reconstructed experiment setup.
+
+        Examples
+        --------
+        >>> hybiss = HybISS_Setup.load_config('experiment_config.json')
+        """
+        from ..core import TissueCellTypes
+
+        if format == 'auto':
+            if filepath.endswith('.json'):
+                format = 'json'
+            elif filepath.endswith('.yaml') or filepath.endswith('.yml'):
+                format = 'yaml'
+            elif filepath.endswith('.npz'):
+                format = 'npz'
+            else:
+                format = 'json'
+
+        if format == 'json':
+            config = cls._load_json(filepath)
+        elif format == 'yaml':
+            config = cls._load_yaml(filepath)
+        elif format == 'npz':
+            config = cls._load_npz(filepath)
+        else:
+            raise ValueError(f"Unknown format: {format}")
+
+        # Recreate tissue
+        tissue = TissueCellTypes()
+        tissue._gene_names = config['gene_names']
+        tissue._cell_type_names = config['cell_type_names']
+        tissue.gene_expression_by_type = np.array(config['expression_matrix'])
+
+        # Recreate transfer function
+        tf_type = config['transfer_function']['type']
+        if tf_type == 'IdentityTransfer':
+            transfer_function = IdentityTransfer()
+        else:
+            # Default to identity if unknown
+            transfer_function = IdentityTransfer()
+
+        # Create HybISS_Setup
+        obj = cls(
+            tissue=tissue,
+            genes_sensitivities=np.array(config['genes_sensitivities']),
+            genes_sensitivities_variation=np.array(config['genes_sensitivities_variation']),
+            transfer_function=transfer_function,
+        )
+
+        return obj
+
+    @staticmethod
+    def _load_json(filepath: str) -> dict:
+        """Load from JSON format."""
+        import json
+        with open(filepath, 'r') as f:
+            return json.load(f)
+
+    @staticmethod
+    def _load_yaml(filepath: str) -> dict:
+        """Load from YAML format."""
+        import yaml
+        with open(filepath, 'r') as f:
+            return yaml.safe_load(f)
+
+    @staticmethod
+    def _load_npz(filepath: str) -> dict:
+        """Load from NPZ format."""
+        data = np.load(filepath, allow_pickle=True)
+        return {
+            'n_genes': int(data['n_genes'][0]),
+            'n_cell_types': int(data['n_cell_types'][0]),
+            'gene_names': data['gene_names'].tolist(),
+            'cell_type_names': data['cell_type_names'].tolist(),
+            'genes_sensitivities': data['genes_sensitivities'].tolist(),
+            'genes_sensitivities_variation': data['genes_sensitivities_variation'].tolist(),
+            'expression_matrix': data['expression_matrix'].tolist(),
+            'transfer_function': {'type': str(data['transfer_function_type'][0])},
+        }

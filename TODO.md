@@ -3,41 +3,41 @@
 ## High Priority - Documentation & Usability
 
 ### Documentation (Critical for Adoption)
-- [ ] **Update notebooks**: Make notebooks more explanatory by alternating explanations and plots of specific features, clearly describing the logic of the approach
-- [ ] **Sphinx documentation**: Build comprehensive API documentation using Sphinx
-- [ ] **Sample datasets**: Include 3-4 pre-generated sample datasets in compressed format that can be loaded directly via import
-- [ ] **Getting Started Notebook**: Basic usage tutorial
+- [x] **Update notebooks**: Make notebooks more explanatory by alternating explanations and plots of specific features, clearly describing the logic of the approach
+- [x] **Sphinx documentation**: Build comprehensive API documentation using Sphinx
+- [x] **Sample datasets**: Include 3-4 pre-generated sample datasets in compressed format that can be loaded directly via import
+- [x] **Getting Started Notebook**: Basic usage tutorial
   - Create tissue, define FOV distribution, generate and visualize
   - Simple HybISS experiment simulation
 
 ### Tissue Descriptions & Examples
-- [ ] **Tissue description folder**: Create a folder with plain-text procedural descriptions of how to create FOVs for specific real tissues (e.g., colon crypts, cortical layers, skin epidermis). These descriptions will:
+- [x] **Tissue description folder**: Create a folder with plain-text procedural descriptions of how to create FOVs for specific real tissues (e.g., colon crypts, cortical layers, skin epidermis). These descriptions will:
   - Serve as reference to verify we have all necessary primitives for detailed tissue simulation
   - Later be converted to working code showcased in notebooks
-- [ ] **Tissue-specific notebooks**: Create notebooks demonstrating simulations of specific real tissues
-- [ ] **Custom Rules Notebook**: Demonstrate all cell type assignment rules
+- [x] **Tissue-specific notebooks**: Create notebooks demonstrating simulations of specific real tissues
+- [x] **Custom Rules Notebook**: Demonstrate all cell type assignment rules
   - Examples of each rule type with visualizations
   - Show how to combine rules for complex patterns
 
 ### Missing Histological Elements
-- [ ] **LayeredElement**: For simulating stratified tissue layers (e.g., cortical layers, epidermis)
-- [ ] **BranchingStructure**: For tree-like structures (e.g., ductal networks, vasculature)
+- [x] **LayeredElement**: For simulating stratified tissue layers (e.g., cortical layers, epidermis)
+- [x] **BranchingStructure**: For tree-like structures (e.g., ductal networks, vasculature)
 
 ## Medium Priority - Core Features
 
 ### Simulation Modes
-- [ ] **Two Modes of Operation**: Support both random FOV generation and larger tissue simulation
+- [x] **Two Modes of Operation**: Support both random FOV generation and larger tissue simulation
   - **Mode 1 (current)**: Random FOV generation with stochastic element placement
   - **Mode 2 (new)**: Larger tissue simulation where:
     - A large tissue slice is generated once with explicit placement of structures
     - Multiple FOVs are extracted as crops from the larger tissue
     - Enables spatial coherence across multiple FOVs
     - Supports reproducible tile-based simulations
-- [ ] **TissueSlice.extract_fov(x, y, size)**: Extract a FOV from a specific location
+- [x] **TissueSlice.extract_fov(x, y, size)**: Extract a FOV from a specific location
 
 ### Visualization
-- [ ] **plot_tissue_slice()**: Visualization for TissueSlice with region boundaries
-- [ ] **plot_probability_field()**: Visualization for ProbabilityNodeFieldRule fields
+- [x] **plot_tissue_slice()**: Visualization for TissueSlice with region boundaries
+- [x] **plot_probability_field()**: Visualization for ProbabilityNodeFieldRule fields
   - Render the underlying probability/logits field as a heatmap or contour plot
   - Show node locations and interpolated probabilities
   - Support for multi-class probability visualization
@@ -52,13 +52,13 @@
   - **StromalElement**: Background connective tissue with specific properties
 
 ### Serialization & I/O
-- [ ] **TissueSlice.save()** / **TissueSlice.load()**: Pickle or HDF5 serialization
-- [ ] **HybISS_Setup.save_config()**: Save experiment configuration for reproducibility
+- [x] **TissueSlice.save()** / **TissueSlice.load()**: Pickle or HDF5 serialization
+- [x] **HybISS_Setup.save_config()**: Save experiment configuration for reproducibility
 
 ### Configuration
-- [ ] **Config dataclass**: Centralized configuration for simulation parameters
+- [x] **Config dataclass**: Centralized configuration for simulation parameters
 - [ ] **from_config()** factory methods for main classes
-- [ ] **YAML/JSON config loading**: Load simulation setup from config files
+- [x] **YAML/JSON config loading**: Load simulation setup from config files
 
 ## Lower Priority - Advanced Features
 
@@ -127,16 +127,16 @@
 ## Code Quality
 
 ### Refactoring
-- [ ] Fix `FrameWideUpdater` one-time-use limitation
+- [x] Fix `FrameWideUpdater` one-time-use limitation
 
 ### Testing
-- [ ] Add property-based tests (hypothesis)
-- [ ] Add integration tests for full simulation pipelines
+- [x] Add property-based tests (hypothesis)
+- [x] Add integration tests for full simulation pipelines
 - [ ] Add performance benchmarks
 - [ ] Test edge cases (empty FOVs, single cell, etc.)
 
 ### CI & Testing
-- [ ] **Pre-commit Hooks**: Code quality checks
+- [x] **Pre-commit Hooks**: Code quality checks
   - Linting (ruff/flake8)
   - Formatting (black)
   - Type checking (mypy)

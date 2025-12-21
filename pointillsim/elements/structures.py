@@ -1489,3 +1489,1307 @@ class BranchingStructure:
             return np.zeros_like(self.branch_depths, dtype=float)
 
         return self.branch_depths / max_depth
+
+
+class FibrillarStructure:
+    """Elongated fibrous histological structure.
+
+    Represents fibrillar tissue components such as collagen bundles, muscle fibers,
+    nerve tracts, or other elongated structures with aligned cells. The structure
+    consists of parallel or slightly wavy fibers that can span the field of view.
+
+    Parameters
+    ----------
+    frame_size : int, optional
+        Size of the FOV in pixels. Default is 5000.
+    n_fibers : int, optional
+        Number of parallel fibers. Default is 5.
+    fiber_width : float, optional
+        Width of each fiber. Default is 30.
+    fiber_spacing : float, optional
+        Spacing between fiber centers. Default is 50.
+    orientation : float, optional
+        Orientation angle in radians. If None, random. Default is None.
+    waviness : float, optional
+        Amount of wave/undulation in fibers (0-1). Default is 0.1.
+    fixed_center : np.ndarray, optional
+        Center position of the fiber bundle. If None, centered in FOV.
+    tipical_cell_spacing : float, optional
+        Average cell spacing. Default is 8.
+    rules : CellTypeRuleBase or list
+        Rules for cell type assignment. Required.
+
+    Attributes
+    ----------
+    polygon : shapely.Polygon
+        Union of all fiber polygons.
+    fibers : list of shapely.Polygon
+        Individual fiber polygons.
+    cell_centroids : np.ndarray
+        Cell centroid positions.
+    fiber_indices : np.ndarray
+        Fiber index (0 to n_fibers-1) for each cell.
+
+    Examples
+    --------
+    >>> from pointillsim.rules import SingleTypeRule
+    >>> rule = SingleTypeRule(n_cell_types=3, cell_type_ix=1)
+    >>> collagen = FibrillarStructure(
+    ...     frame_size=500, n_fibers=4, fiber_width=20,
+    ...     orientation=np.pi/4, rules=rule
+    ... )
+    >>> realized = collagen.generate()
+    """
+
+    def __init__(
+        self,
+        frame_size: int = 5000,
+        n_fibers: int = 5,
+        fiber_width: float = 30,
+        fiber_spacing: float = 50,
+        orientation: Optional[float] = None,
+        waviness: float = 0.1,
+        fixed_center: Optional[NDArray[np.floating]] = None,
+        tipical_cell_spacing: float = 8,
+        rules=None,
+    ) -> None:
+        if rules is None:
+            raise ValueError("No rules provided")
+
+        self.frame_size = frame_size
+        self.n_fibers = n_fibers
+        self.fiber_width = fiber_width
+        self.fiber_spacing = fiber_spacing
+        self.orientation = orientation
+        self.waviness = waviness
+        self.fixed_center = fixed_center
+        self.tipical_cell_spacing = tipical_cell_spacing
+
+        self.rules = rules if isinstance(rules, list) else [rules]
+        self.original_rules = self.rules
+
+        self.polygon = None
+        self.fibers = []
+        self.cell_centroids = None
+        self.cell_probabilities = None
+        self.fiber_indices = None
+
+        self.rng = np.random.default_rng(seed=int(time.time() * 1e6))
+        self._class_instance_one_hot = None
+
+    @property
+    def scale(self) -> float:
+        """float: Effective scale for rule compatibility."""
+        return self.n_fibers * self.fiber_spacing / 2
+
+    @property
+    def center(self) -> NDArray[np.floating]:
+        """np.ndarray: Center of the structure."""
+        if self.fixed_center is not None:
+            return np.array([self.fixed_center]).reshape(1, 2)
+        return np.array([[self.frame_size / 2, self.frame_size / 2]])
+
+    def generate(self, **kwargs) -> "FibrillarStructure":
+        """Generate a new realization of this fibrillar structure."""
+        other = copy.deepcopy(self)
+        other.polygon = None
+        other.fibers = []
+        other.cell_centroids = None
+        other.cell_probabilities = None
+        other.fiber_indices = None
+        other._class_instance_one_hot = None
+        other.rules = other.original_rules
+
+        # Set orientation
+        if other.orientation is None:
+            other.orientation = np.random.uniform(0, np.pi)
+
+        # Generate fibers
+        other.fibers = other._generate_fibers()
+        other.polygon = unary_union(other.fibers) if other.fibers else Polygon()
+
+        # Generate cells
+        other.cell_centroids, other.fiber_indices = other._generate_cells()
+
+        # Apply rules
+        other.rules = [r.adapt_rule_to_element(other) for r in other.rules]
+        other.cell_probabilities = other.apply_rules(other.rules)
+
+        return other
+
+    def _generate_fibers(self) -> list:
+        """Generate individual fiber polygons."""
+        fibers = []
+        center = self.center.flatten()
+
+        # Direction vectors
+        direction = np.array([np.cos(self.orientation), np.sin(self.orientation)])
+        perp = np.array([-np.sin(self.orientation), np.cos(self.orientation)])
+
+        # Fiber length (diagonal of frame to ensure coverage)
+        fiber_length = self.frame_size * 1.5
+
+        # Starting offset for centering the bundle
+        bundle_width = (self.n_fibers - 1) * self.fiber_spacing
+        start_offset = -bundle_width / 2
+
+        for i in range(self.n_fibers):
+            # Offset perpendicular to direction
+            offset = start_offset + i * self.fiber_spacing
+            fiber_center = center + offset * perp
+
+            # Create wavy centerline
+            n_points = max(10, int(fiber_length / 50))
+            t = np.linspace(-0.5, 0.5, n_points)
+            points = []
+
+            for ti in t:
+                pos = fiber_center + ti * fiber_length * direction
+                # Add waviness
+                wave = np.sin(ti * 4 * np.pi) * self.waviness * self.fiber_spacing
+                pos = pos + wave * perp
+                points.append(pos)
+
+            # Create polygon by buffering the line
+            line = LineString(points)
+            fiber_poly = line.buffer(self.fiber_width / 2, cap_style=2)
+            fibers.append(fiber_poly)
+
+        return fibers
+
+    def _generate_cells(self) -> Tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Generate cell centroids within fibers."""
+        if not self.fibers or self.polygon.is_empty:
+            return np.empty((0, 2)), np.empty(0, dtype=int)
+
+        bounds = self.polygon.bounds
+        x = np.arange(bounds[0], bounds[2], self.tipical_cell_spacing)
+        y = np.arange(bounds[1], bounds[3], self.tipical_cell_spacing * np.sin(np.pi / 3))
+        X, Y = np.meshgrid(x, y)
+        X[::2] += self.tipical_cell_spacing / 2.0
+        points = np.stack((X.flatten(), Y.flatten()), axis=1)
+
+        # Keep points inside any fiber
+        mask = np.array([self.polygon.contains(Point(p[0], p[1])) for p in points])
+        points = points[mask]
+
+        # Add jitter
+        points += np.random.normal(0, self.tipical_cell_spacing / 5.0, points.shape)
+
+        # Assign fiber indices
+        fiber_indices = self._assign_fiber_indices(points)
+
+        return points, fiber_indices
+
+    def _assign_fiber_indices(self, points: NDArray[np.floating]) -> NDArray[np.integer]:
+        """Assign each cell to the nearest fiber."""
+        indices = np.zeros(len(points), dtype=int)
+        for i, point in enumerate(points):
+            px = Point(point[0], point[1])
+            min_dist = float('inf')
+            for j, fiber in enumerate(self.fibers):
+                if fiber.contains(px):
+                    indices[i] = j
+                    break
+                dist = fiber.exterior.distance(px)
+                if dist < min_dist:
+                    min_dist = dist
+                    indices[i] = j
+        return indices
+
+    @property
+    def bounding_box(self) -> Tuple[float, float, float, float]:
+        """tuple: Bounding box of the polygon."""
+        if self.polygon is not None and not self.polygon.is_empty:
+            return self.polygon.bounds
+        return (0, 0, self.frame_size, self.frame_size)
+
+    @property
+    def class_instance(self) -> NDArray[np.integer]:
+        """np.ndarray: Sampled cell type indices."""
+        return np.argmax(self.class_instance_one_hot, axis=1)
+
+    @property
+    def class_instance_one_hot(self) -> NDArray[np.integer]:
+        """np.ndarray: One-hot encoded sampled cell types."""
+        if self._class_instance_one_hot is None:
+            if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+                self._class_instance_one_hot = self.rng.multinomial(
+                    n=1, pvals=self.cell_probabilities
+                )
+            else:
+                self._class_instance_one_hot = np.empty((0, 0), dtype=int)
+        return self._class_instance_one_hot
+
+    @property
+    def ML_class(self) -> NDArray[np.integer]:
+        """np.ndarray: Maximum likelihood cell type."""
+        if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+            return np.argmax(self.cell_probabilities, axis=1)
+        return np.empty(0, dtype=int)
+
+    def is_inside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are inside the structure."""
+        return np.array([self.polygon.contains(Point(p[0], p[1])) for p in points], dtype=bool)
+
+    def is_outside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are outside the structure."""
+        return ~self.is_inside(points)
+
+    def remove_cells(self, bool_ix: NDArray[np.bool_]) -> None:
+        """Remove cells at specified indices."""
+        self.cell_centroids = self.cell_centroids[~bool_ix]
+        self.cell_probabilities = self.cell_probabilities[~bool_ix]
+        if self.fiber_indices is not None:
+            self.fiber_indices = self.fiber_indices[~bool_ix]
+
+    def apply_rules(self, rules) -> NDArray[np.floating]:
+        """Apply rules to compute cell type probabilities."""
+        if self.cell_centroids is None or len(self.cell_centroids) == 0:
+            return np.empty((0, rules[0].n_cell_types if rules else 0))
+
+        probs = None
+        for rule in rules:
+            probs = rule.apply(self.cell_centroids, current_probs=probs)
+
+        if probs is None:
+            n_cells = self.cell_centroids.shape[0]
+            n_types = rules[0].n_cell_types if rules else 0
+            probs = np.empty((n_cells, n_types))
+
+        return probs
+
+
+class ClusterElement:
+    """Clustered group of cells with shared properties.
+
+    Represents localized cellular aggregates such as lymphoid follicles,
+    tumor nodules, inflammatory infiltrates, or any discrete cluster of
+    cells. The cluster has an approximately circular shape with optional
+    density gradients from center to periphery.
+
+    Parameters
+    ----------
+    frame_size : int, optional
+        Size of the FOV in pixels. Default is 5000.
+    radius : float, optional
+        Approximate radius of the cluster. Default is 100.
+    n_vertices : int or tuple, optional
+        Number of vertices for the polygon boundary. Default is (8, 12).
+    fixed_center : np.ndarray, optional
+        Center position. If None, random placement.
+    density_profile : str, optional
+        Cell density profile: 'uniform', 'dense_center', 'dense_edge'.
+        Default is 'uniform'.
+    tipical_cell_spacing : float, optional
+        Average cell spacing. Default is 8.
+    smoothing_iterations : int, optional
+        Chaikin smoothing iterations. Default is 2.
+    rules : CellTypeRuleBase or list
+        Rules for cell type assignment. Required.
+
+    Attributes
+    ----------
+    polygon : shapely.Polygon
+        The cluster boundary polygon.
+    cell_centroids : np.ndarray
+        Cell centroid positions.
+
+    Examples
+    --------
+    >>> from pointillsim.rules import MixOfNCellTypesRule
+    >>> rule = MixOfNCellTypesRule(n_cell_types=4, list_N=[0, 1], proportions=[0.7, 0.3])
+    >>> follicle = ClusterElement(
+    ...     radius=80, density_profile='dense_center', rules=rule
+    ... )
+    >>> realized = follicle.generate()
+    """
+
+    def __init__(
+        self,
+        frame_size: int = 5000,
+        radius: float = 100,
+        n_vertices: Union[int, Tuple[int, int]] = (8, 12),
+        fixed_center: Optional[NDArray[np.floating]] = None,
+        density_profile: str = "uniform",
+        tipical_cell_spacing: float = 8,
+        smoothing_iterations: int = 2,
+        rules=None,
+    ) -> None:
+        if rules is None:
+            raise ValueError("No rules provided")
+
+        self.frame_size = frame_size
+        self.radius = radius
+        self.n_vertices = n_vertices
+        self.fixed_center = fixed_center
+        self.density_profile = density_profile
+        self.tipical_cell_spacing = tipical_cell_spacing
+        self.smoothing_iterations = smoothing_iterations
+
+        self.rules = rules if isinstance(rules, list) else [rules]
+        self.original_rules = self.rules
+
+        self.polygon = None
+        self.cell_centroids = None
+        self.cell_probabilities = None
+
+        self.rng = np.random.default_rng(seed=int(time.time() * 1e6))
+        self._class_instance_one_hot = None
+
+    @property
+    def scale(self) -> float:
+        """float: Effective scale for rule compatibility."""
+        return self.radius
+
+    @property
+    def center(self) -> NDArray[np.floating]:
+        """np.ndarray: Center of the cluster."""
+        if self._center is not None:
+            return self._center.reshape(1, 2)
+        return np.array([[self.frame_size / 2, self.frame_size / 2]])
+
+    def generate(self, **kwargs) -> "ClusterElement":
+        """Generate a new realization of this cluster element."""
+        other = copy.deepcopy(self)
+        other.polygon = None
+        other.cell_centroids = None
+        other.cell_probabilities = None
+        other._class_instance_one_hot = None
+        other.rules = other.original_rules
+
+        # Set center
+        if other.fixed_center is not None:
+            other._center = np.asarray(other.fixed_center).flatten()[:2]
+        else:
+            margin = other.radius * 1.5
+            other._center = np.random.uniform(margin, other.frame_size - margin, size=2)
+
+        # Generate polygon
+        other.polygon = other._generate_polygon()
+
+        # Generate cells
+        other.cell_centroids = other._generate_cells()
+
+        # Apply rules
+        other.rules = [r.adapt_rule_to_element(other) for r in other.rules]
+        other.cell_probabilities = other.apply_rules(other.rules)
+
+        return other
+
+    def _generate_polygon(self) -> Polygon:
+        """Generate the cluster boundary polygon."""
+        n_verts = (
+            np.random.randint(self.n_vertices[0], self.n_vertices[1])
+            if isinstance(self.n_vertices, tuple)
+            else self.n_vertices
+        )
+        points = generate_uniform_points_in_circle(
+            self._center.reshape(1, 2), self.radius, n_verts
+        )
+        polygon = Polygon(points).convex_hull
+
+        if self.smoothing_iterations > 0:
+            polygon = smooth_polygon(polygon, iterations=self.smoothing_iterations, preserve_area=True)
+
+        return polygon
+
+    def _generate_cells(self) -> NDArray[np.floating]:
+        """Generate cell centroids within the cluster."""
+        bounds = self.polygon.bounds
+        spacing = self.tipical_cell_spacing
+
+        if self.density_profile == 'dense_center':
+            spacing = spacing * 0.8  # Slightly denser overall
+        elif self.density_profile == 'dense_edge':
+            spacing = spacing * 0.9
+
+        x = np.arange(bounds[0], bounds[2], spacing)
+        y = np.arange(bounds[1], bounds[3], spacing * np.sin(np.pi / 3))
+        X, Y = np.meshgrid(x, y)
+        X[::2] += spacing / 2.0
+        points = np.stack((X.flatten(), Y.flatten()), axis=1)
+
+        # Keep points inside polygon
+        mask = np.array([self.polygon.contains(Point(p[0], p[1])) for p in points])
+        points = points[mask]
+
+        # Apply density profile
+        if self.density_profile == 'dense_center':
+            # Higher probability of keeping cells near center
+            distances = np.linalg.norm(points - self._center, axis=1)
+            max_dist = distances.max() if len(distances) > 0 else 1
+            keep_prob = 1 - 0.5 * (distances / max_dist) ** 2
+            keep_mask = np.random.random(len(points)) < keep_prob
+            points = points[keep_mask]
+        elif self.density_profile == 'dense_edge':
+            # Higher probability near edge
+            distances = np.linalg.norm(points - self._center, axis=1)
+            max_dist = distances.max() if len(distances) > 0 else 1
+            keep_prob = 0.5 + 0.5 * (distances / max_dist) ** 2
+            keep_mask = np.random.random(len(points)) < keep_prob
+            points = points[keep_mask]
+
+        # Add jitter
+        points += np.random.normal(0, self.tipical_cell_spacing / 5.0, points.shape)
+        return points
+
+    @property
+    def bounding_box(self) -> Tuple[float, float, float, float]:
+        """tuple: Bounding box of the polygon."""
+        if self.polygon is not None:
+            return self.polygon.bounds
+        return (0, 0, self.frame_size, self.frame_size)
+
+    @property
+    def class_instance(self) -> NDArray[np.integer]:
+        """np.ndarray: Sampled cell type indices."""
+        return np.argmax(self.class_instance_one_hot, axis=1)
+
+    @property
+    def class_instance_one_hot(self) -> NDArray[np.integer]:
+        """np.ndarray: One-hot encoded sampled cell types."""
+        if self._class_instance_one_hot is None:
+            if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+                self._class_instance_one_hot = self.rng.multinomial(
+                    n=1, pvals=self.cell_probabilities
+                )
+            else:
+                self._class_instance_one_hot = np.empty((0, 0), dtype=int)
+        return self._class_instance_one_hot
+
+    @property
+    def ML_class(self) -> NDArray[np.integer]:
+        """np.ndarray: Maximum likelihood cell type."""
+        if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+            return np.argmax(self.cell_probabilities, axis=1)
+        return np.empty(0, dtype=int)
+
+    def is_inside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are inside the structure."""
+        return np.array([self.polygon.contains(Point(p[0], p[1])) for p in points], dtype=bool)
+
+    def is_outside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are outside the structure."""
+        return ~self.is_inside(points)
+
+    def remove_cells(self, bool_ix: NDArray[np.bool_]) -> None:
+        """Remove cells at specified indices."""
+        self.cell_centroids = self.cell_centroids[~bool_ix]
+        self.cell_probabilities = self.cell_probabilities[~bool_ix]
+
+    def apply_rules(self, rules) -> NDArray[np.floating]:
+        """Apply rules to compute cell type probabilities."""
+        if self.cell_centroids is None or len(self.cell_centroids) == 0:
+            return np.empty((0, rules[0].n_cell_types if rules else 0))
+
+        probs = None
+        for rule in rules:
+            probs = rule.apply(self.cell_centroids, current_probs=probs)
+
+        if probs is None:
+            n_cells = self.cell_centroids.shape[0]
+            n_types = rules[0].n_cell_types if rules else 0
+            probs = np.empty((n_cells, n_types))
+
+        return probs
+
+    def normalized_distance_from_center(
+        self, points: Optional[NDArray[np.floating]] = None
+    ) -> NDArray[np.floating]:
+        """Calculate normalized distance from cluster center (0=center, 1=edge)."""
+        if points is None:
+            points = self.cell_centroids
+        if points is None or len(points) == 0:
+            return np.empty(0)
+
+        distances = np.linalg.norm(points - self._center, axis=1)
+        return np.clip(distances / self.radius, 0, 1)
+
+
+class GlandularUnit:
+    """Glandular/acinar structure with secretory units.
+
+    Represents glandular tissue components such as acini, alveoli, or
+    secretory tubules. The structure consists of multiple connected
+    secretory units (acini) arranged around a central duct or lumen.
+
+    Parameters
+    ----------
+    frame_size : int, optional
+        Size of the FOV in pixels. Default is 5000.
+    n_acini : int, optional
+        Number of acinar units. Default is 5.
+    acinus_radius : float, optional
+        Radius of each acinus. Default is 50.
+    arrangement : str, optional
+        Acini arrangement: 'circular', 'linear', 'random'. Default is 'circular'.
+    central_duct : bool, optional
+        Whether to include a central duct. Default is True.
+    duct_radius : float, optional
+        Radius of central duct. Default is 20.
+    fixed_center : np.ndarray, optional
+        Center position. If None, random placement.
+    tipical_cell_spacing : float, optional
+        Average cell spacing. Default is 8.
+    rules : CellTypeRuleBase or list
+        Rules for cell type assignment. Required.
+
+    Attributes
+    ----------
+    polygon : shapely.Polygon
+        Union of all acinar polygons.
+    acini : list of shapely.Polygon
+        Individual acinar polygons.
+    duct : shapely.Polygon
+        Central duct polygon (if central_duct=True).
+    cell_centroids : np.ndarray
+        Cell centroid positions.
+    acinus_indices : np.ndarray
+        Acinus index for each cell (-1 for duct cells).
+    """
+
+    def __init__(
+        self,
+        frame_size: int = 5000,
+        n_acini: int = 5,
+        acinus_radius: float = 50,
+        arrangement: str = "circular",
+        central_duct: bool = True,
+        duct_radius: float = 20,
+        fixed_center: Optional[NDArray[np.floating]] = None,
+        tipical_cell_spacing: float = 8,
+        rules=None,
+    ) -> None:
+        if rules is None:
+            raise ValueError("No rules provided")
+
+        self.frame_size = frame_size
+        self.n_acini = n_acini
+        self.acinus_radius = acinus_radius
+        self.arrangement = arrangement
+        self.central_duct = central_duct
+        self.duct_radius = duct_radius
+        self.fixed_center = fixed_center
+        self.tipical_cell_spacing = tipical_cell_spacing
+
+        self.rules = rules if isinstance(rules, list) else [rules]
+        self.original_rules = self.rules
+
+        self.polygon = None
+        self.acini = []
+        self.duct = None
+        self.cell_centroids = None
+        self.cell_probabilities = None
+        self.acinus_indices = None
+
+        self.rng = np.random.default_rng(seed=int(time.time() * 1e6))
+        self._class_instance_one_hot = None
+        self._center = None
+
+    @property
+    def scale(self) -> float:
+        """float: Effective scale for rule compatibility."""
+        return self.acinus_radius * 2
+
+    @property
+    def center(self) -> NDArray[np.floating]:
+        """np.ndarray: Center of the glandular unit."""
+        if self._center is not None:
+            return self._center.reshape(1, 2)
+        return np.array([[self.frame_size / 2, self.frame_size / 2]])
+
+    def generate(self, **kwargs) -> "GlandularUnit":
+        """Generate a new realization of this glandular unit."""
+        other = copy.deepcopy(self)
+        other.polygon = None
+        other.acini = []
+        other.duct = None
+        other.cell_centroids = None
+        other.cell_probabilities = None
+        other.acinus_indices = None
+        other._class_instance_one_hot = None
+        other.rules = other.original_rules
+
+        # Set center
+        if other.fixed_center is not None:
+            other._center = np.asarray(other.fixed_center).flatten()[:2]
+        else:
+            margin = other.acinus_radius * 3
+            other._center = np.random.uniform(margin, other.frame_size - margin, size=2)
+
+        # Generate structure
+        other.acini, other.duct = other._generate_acini()
+        other.polygon = unary_union(other.acini + ([other.duct] if other.duct else []))
+
+        # Generate cells
+        other.cell_centroids, other.acinus_indices = other._generate_cells()
+
+        # Apply rules
+        other.rules = [r.adapt_rule_to_element(other) for r in other.rules]
+        other.cell_probabilities = other.apply_rules(other.rules)
+
+        return other
+
+    def _generate_acini(self) -> Tuple[list, Optional[Polygon]]:
+        """Generate acinar polygons and central duct."""
+        acini = []
+
+        if self.arrangement == 'circular':
+            # Arrange acini in a circle around center
+            angles = np.linspace(0, 2 * np.pi, self.n_acini, endpoint=False)
+            arrangement_radius = self.acinus_radius * 1.5
+
+            for angle in angles:
+                acinus_center = self._center + arrangement_radius * np.array([np.cos(angle), np.sin(angle)])
+                acinus = Point(acinus_center).buffer(self.acinus_radius, resolution=16)
+                acini.append(acinus)
+
+        elif self.arrangement == 'linear':
+            # Arrange acini in a line
+            direction = np.random.uniform(0, np.pi)
+            dir_vec = np.array([np.cos(direction), np.sin(direction)])
+            spacing = self.acinus_radius * 2.2
+            start = self._center - (self.n_acini - 1) / 2 * spacing * dir_vec
+
+            for i in range(self.n_acini):
+                acinus_center = start + i * spacing * dir_vec
+                acinus = Point(acinus_center).buffer(self.acinus_radius, resolution=16)
+                acini.append(acinus)
+
+        else:  # random
+            for _ in range(self.n_acini):
+                offset = np.random.uniform(-self.acinus_radius * 2, self.acinus_radius * 2, size=2)
+                acinus_center = self._center + offset
+                acinus = Point(acinus_center).buffer(self.acinus_radius, resolution=16)
+                acini.append(acinus)
+
+        # Generate central duct
+        duct = None
+        if self.central_duct:
+            duct = Point(self._center).buffer(self.duct_radius, resolution=16)
+
+        return acini, duct
+
+    def _generate_cells(self) -> Tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Generate cell centroids within the glandular unit."""
+        if self.polygon.is_empty:
+            return np.empty((0, 2)), np.empty(0, dtype=int)
+
+        bounds = self.polygon.bounds
+        x = np.arange(bounds[0], bounds[2], self.tipical_cell_spacing)
+        y = np.arange(bounds[1], bounds[3], self.tipical_cell_spacing * np.sin(np.pi / 3))
+        X, Y = np.meshgrid(x, y)
+        X[::2] += self.tipical_cell_spacing / 2.0
+        points = np.stack((X.flatten(), Y.flatten()), axis=1)
+
+        # Keep points inside polygon
+        mask = np.array([self.polygon.contains(Point(p[0], p[1])) for p in points])
+        points = points[mask]
+
+        # Add jitter
+        points += np.random.normal(0, self.tipical_cell_spacing / 5.0, points.shape)
+
+        # Assign acinus indices
+        acinus_indices = self._assign_acinus_indices(points)
+
+        return points, acinus_indices
+
+    def _assign_acinus_indices(self, points: NDArray[np.floating]) -> NDArray[np.integer]:
+        """Assign each cell to an acinus or duct."""
+        indices = np.full(len(points), -1, dtype=int)
+
+        for i, point in enumerate(points):
+            px = Point(point[0], point[1])
+
+            # Check if in duct first
+            if self.duct is not None and self.duct.contains(px):
+                indices[i] = -1
+                continue
+
+            # Check each acinus
+            for j, acinus in enumerate(self.acini):
+                if acinus.contains(px):
+                    indices[i] = j
+                    break
+
+        return indices
+
+    @property
+    def bounding_box(self) -> Tuple[float, float, float, float]:
+        """tuple: Bounding box of the polygon."""
+        if self.polygon is not None and not self.polygon.is_empty:
+            return self.polygon.bounds
+        return (0, 0, self.frame_size, self.frame_size)
+
+    @property
+    def class_instance(self) -> NDArray[np.integer]:
+        """np.ndarray: Sampled cell type indices."""
+        return np.argmax(self.class_instance_one_hot, axis=1)
+
+    @property
+    def class_instance_one_hot(self) -> NDArray[np.integer]:
+        """np.ndarray: One-hot encoded sampled cell types."""
+        if self._class_instance_one_hot is None:
+            if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+                self._class_instance_one_hot = self.rng.multinomial(
+                    n=1, pvals=self.cell_probabilities
+                )
+            else:
+                self._class_instance_one_hot = np.empty((0, 0), dtype=int)
+        return self._class_instance_one_hot
+
+    @property
+    def ML_class(self) -> NDArray[np.integer]:
+        """np.ndarray: Maximum likelihood cell type."""
+        if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+            return np.argmax(self.cell_probabilities, axis=1)
+        return np.empty(0, dtype=int)
+
+    def is_inside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are inside the structure."""
+        return np.array([self.polygon.contains(Point(p[0], p[1])) for p in points], dtype=bool)
+
+    def is_outside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are outside the structure."""
+        return ~self.is_inside(points)
+
+    def remove_cells(self, bool_ix: NDArray[np.bool_]) -> None:
+        """Remove cells at specified indices."""
+        self.cell_centroids = self.cell_centroids[~bool_ix]
+        self.cell_probabilities = self.cell_probabilities[~bool_ix]
+        if self.acinus_indices is not None:
+            self.acinus_indices = self.acinus_indices[~bool_ix]
+
+    def apply_rules(self, rules) -> NDArray[np.floating]:
+        """Apply rules to compute cell type probabilities."""
+        if self.cell_centroids is None or len(self.cell_centroids) == 0:
+            return np.empty((0, rules[0].n_cell_types if rules else 0))
+
+        probs = None
+        for rule in rules:
+            probs = rule.apply(self.cell_centroids, current_probs=probs)
+
+        if probs is None:
+            n_cells = self.cell_centroids.shape[0]
+            n_types = rules[0].n_cell_types if rules else 0
+            probs = np.empty((n_cells, n_types))
+
+        return probs
+
+
+class InterfaceElement:
+    """Tissue boundary/interface element.
+
+    Represents transition zones between different tissue types such as
+    epithelial-stromal interfaces, tumor-normal boundaries, or any
+    biological interface where two distinct regions meet.
+
+    Parameters
+    ----------
+    frame_size : int, optional
+        Size of the FOV in pixels. Default is 5000.
+    interface_position : float, optional
+        Position of the interface (0-1 fraction of frame). Default is 0.5.
+    interface_width : float, optional
+        Width of the transition zone. Default is 50.
+    orientation : str, optional
+        Interface orientation: 'horizontal', 'vertical', 'diagonal'. Default is 'horizontal'.
+    waviness : float, optional
+        Amount of wave/undulation in the interface (0-1). Default is 0.1.
+    n_waves : int, optional
+        Number of wave cycles across the interface. Default is 3.
+    tipical_cell_spacing : float, optional
+        Average cell spacing. Default is 8.
+    rules_side_a : CellTypeRuleBase or list, optional
+        Rules for side A (before interface). If None, uses main rules.
+    rules_side_b : CellTypeRuleBase or list, optional
+        Rules for side B (after interface). If None, uses main rules.
+    rules : CellTypeRuleBase or list
+        Default rules for both sides. Required if side-specific rules not provided.
+
+    Attributes
+    ----------
+    polygon : shapely.Polygon
+        The full element polygon (entire frame).
+    interface_line : np.ndarray
+        Points defining the interface boundary.
+    cell_centroids : np.ndarray
+        Cell centroid positions.
+    side_indices : np.ndarray
+        Side index (0=A, 1=B) for each cell.
+    interface_distances : np.ndarray
+        Signed distance from interface for each cell (negative=A, positive=B).
+    """
+
+    def __init__(
+        self,
+        frame_size: int = 5000,
+        interface_position: float = 0.5,
+        interface_width: float = 50,
+        orientation: str = "horizontal",
+        waviness: float = 0.1,
+        n_waves: int = 3,
+        tipical_cell_spacing: float = 8,
+        rules_side_a=None,
+        rules_side_b=None,
+        rules=None,
+    ) -> None:
+        if rules is None and (rules_side_a is None or rules_side_b is None):
+            raise ValueError("Either 'rules' or both 'rules_side_a' and 'rules_side_b' must be provided")
+
+        self.frame_size = frame_size
+        self.interface_position = interface_position
+        self.interface_width = interface_width
+        self.orientation = orientation
+        self.waviness = waviness
+        self.n_waves = n_waves
+        self.tipical_cell_spacing = tipical_cell_spacing
+
+        # Set up rules
+        if rules_side_a is not None:
+            self.rules_side_a = rules_side_a if isinstance(rules_side_a, list) else [rules_side_a]
+        else:
+            self.rules_side_a = rules if isinstance(rules, list) else [rules]
+
+        if rules_side_b is not None:
+            self.rules_side_b = rules_side_b if isinstance(rules_side_b, list) else [rules_side_b]
+        else:
+            self.rules_side_b = rules if isinstance(rules, list) else [rules]
+
+        self.rules = self.rules_side_a  # Default for compatibility
+        self.original_rules_a = self.rules_side_a
+        self.original_rules_b = self.rules_side_b
+
+        self.polygon = None
+        self.interface_line = None
+        self.cell_centroids = None
+        self.cell_probabilities = None
+        self.side_indices = None
+        self.interface_distances = None
+
+        self.rng = np.random.default_rng(seed=int(time.time() * 1e6))
+        self._class_instance_one_hot = None
+
+    @property
+    def scale(self) -> float:
+        """float: Effective scale for rule compatibility."""
+        return self.frame_size / 2
+
+    @property
+    def center(self) -> NDArray[np.floating]:
+        """np.ndarray: Center of the element."""
+        return np.array([[self.frame_size / 2, self.frame_size / 2]])
+
+    def generate(self, **kwargs) -> "InterfaceElement":
+        """Generate a new realization of this interface element."""
+        other = copy.deepcopy(self)
+        other.polygon = None
+        other.interface_line = None
+        other.cell_centroids = None
+        other.cell_probabilities = None
+        other.side_indices = None
+        other.interface_distances = None
+        other._class_instance_one_hot = None
+        other.rules_side_a = other.original_rules_a
+        other.rules_side_b = other.original_rules_b
+
+        # Generate polygon and interface
+        other.polygon = Polygon([
+            (0, 0), (other.frame_size, 0),
+            (other.frame_size, other.frame_size), (0, other.frame_size)
+        ])
+        other.interface_line = other._generate_interface_line()
+
+        # Generate cells
+        other.cell_centroids = other._generate_cells()
+        other.side_indices, other.interface_distances = other._compute_side_assignments()
+
+        # Apply rules
+        other.cell_probabilities = other._apply_side_rules()
+
+        return other
+
+    def _generate_interface_line(self) -> NDArray[np.floating]:
+        """Generate the wavy interface line."""
+        n_points = 100
+
+        if self.orientation == 'horizontal':
+            base_y = self.frame_size * self.interface_position
+            x = np.linspace(0, self.frame_size, n_points)
+            wave = np.sin(x / self.frame_size * 2 * np.pi * self.n_waves)
+            y = base_y + wave * self.frame_size * self.waviness
+            return np.column_stack([x, y])
+
+        elif self.orientation == 'vertical':
+            base_x = self.frame_size * self.interface_position
+            y = np.linspace(0, self.frame_size, n_points)
+            wave = np.sin(y / self.frame_size * 2 * np.pi * self.n_waves)
+            x = base_x + wave * self.frame_size * self.waviness
+            return np.column_stack([x, y])
+
+        else:  # diagonal
+            t = np.linspace(0, 1, n_points)
+            base_x = t * self.frame_size
+            base_y = t * self.frame_size
+            wave = np.sin(t * 2 * np.pi * self.n_waves)
+            offset = wave * self.frame_size * self.waviness
+            x = base_x + offset * 0.707
+            y = base_y - offset * 0.707
+            return np.column_stack([x, y])
+
+    def _generate_cells(self) -> NDArray[np.floating]:
+        """Generate cell centroids."""
+        x = np.arange(0, self.frame_size, self.tipical_cell_spacing, dtype=float)
+        y = np.arange(0, self.frame_size, self.tipical_cell_spacing * np.sin(np.pi / 3), dtype=float)
+        X, Y = np.meshgrid(x, y)
+        X[::2] += self.tipical_cell_spacing / 2.0
+        points = np.stack((X.flatten(), Y.flatten()), axis=1)
+
+        # Add jitter
+        points += np.random.normal(0, self.tipical_cell_spacing / 5.0, points.shape)
+        return points
+
+    def _compute_side_assignments(self) -> Tuple[NDArray[np.integer], NDArray[np.floating]]:
+        """Compute which side each cell is on and distance from interface."""
+        interface_line = LineString(self.interface_line)
+
+        distances = np.zeros(len(self.cell_centroids))
+        sides = np.zeros(len(self.cell_centroids), dtype=int)
+
+        for i, point in enumerate(self.cell_centroids):
+            px = Point(point[0], point[1])
+            dist = interface_line.distance(px)
+
+            # Determine side based on orientation
+            if self.orientation == 'horizontal':
+                # Interpolate interface Y at this X
+                idx = np.searchsorted(self.interface_line[:, 0], point[0])
+                idx = np.clip(idx, 1, len(self.interface_line) - 1)
+                interface_y = np.interp(point[0], self.interface_line[:, 0], self.interface_line[:, 1])
+                if point[1] < interface_y:
+                    sides[i] = 0
+                    distances[i] = -dist
+                else:
+                    sides[i] = 1
+                    distances[i] = dist
+            elif self.orientation == 'vertical':
+                interface_x = np.interp(point[1], self.interface_line[:, 1], self.interface_line[:, 0])
+                if point[0] < interface_x:
+                    sides[i] = 0
+                    distances[i] = -dist
+                else:
+                    sides[i] = 1
+                    distances[i] = dist
+            else:  # diagonal
+                # Use distance from diagonal line y=x
+                if point[1] < point[0]:
+                    sides[i] = 0
+                    distances[i] = -dist
+                else:
+                    sides[i] = 1
+                    distances[i] = dist
+
+        return sides, distances
+
+    def _apply_side_rules(self) -> NDArray[np.floating]:
+        """Apply rules to each side separately."""
+        n_cells = len(self.cell_centroids)
+        n_cell_types = self.rules_side_a[0].n_cell_types
+
+        probs = np.zeros((n_cells, n_cell_types))
+
+        # Side A
+        mask_a = self.side_indices == 0
+        if np.any(mask_a):
+            adapted_rules = [r.adapt_rule_to_element(self) for r in self.rules_side_a]
+            probs_a = None
+            for rule in adapted_rules:
+                probs_a = rule.apply(self.cell_centroids[mask_a], current_probs=probs_a)
+            probs[mask_a] = probs_a
+
+        # Side B
+        mask_b = self.side_indices == 1
+        if np.any(mask_b):
+            adapted_rules = [r.adapt_rule_to_element(self) for r in self.rules_side_b]
+            probs_b = None
+            for rule in adapted_rules:
+                probs_b = rule.apply(self.cell_centroids[mask_b], current_probs=probs_b)
+            probs[mask_b] = probs_b
+
+        return probs
+
+    @property
+    def bounding_box(self) -> Tuple[float, float, float, float]:
+        """tuple: Bounding box of the polygon."""
+        return (0, 0, self.frame_size, self.frame_size)
+
+    @property
+    def class_instance(self) -> NDArray[np.integer]:
+        """np.ndarray: Sampled cell type indices."""
+        return np.argmax(self.class_instance_one_hot, axis=1)
+
+    @property
+    def class_instance_one_hot(self) -> NDArray[np.integer]:
+        """np.ndarray: One-hot encoded sampled cell types."""
+        if self._class_instance_one_hot is None:
+            if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+                self._class_instance_one_hot = self.rng.multinomial(
+                    n=1, pvals=self.cell_probabilities
+                )
+            else:
+                self._class_instance_one_hot = np.empty((0, 0), dtype=int)
+        return self._class_instance_one_hot
+
+    @property
+    def ML_class(self) -> NDArray[np.integer]:
+        """np.ndarray: Maximum likelihood cell type."""
+        if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+            return np.argmax(self.cell_probabilities, axis=1)
+        return np.empty(0, dtype=int)
+
+    def is_inside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are inside the element (always True for frame-wide)."""
+        return np.ones(len(points), dtype=bool)
+
+    def is_outside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are outside the element."""
+        return ~self.is_inside(points)
+
+    def remove_cells(self, bool_ix: NDArray[np.bool_]) -> None:
+        """Remove cells at specified indices."""
+        self.cell_centroids = self.cell_centroids[~bool_ix]
+        self.cell_probabilities = self.cell_probabilities[~bool_ix]
+        if self.side_indices is not None:
+            self.side_indices = self.side_indices[~bool_ix]
+        if self.interface_distances is not None:
+            self.interface_distances = self.interface_distances[~bool_ix]
+
+    def apply_rules(self, rules) -> NDArray[np.floating]:
+        """Apply rules to compute cell type probabilities."""
+        if self.cell_centroids is None or len(self.cell_centroids) == 0:
+            return np.empty((0, rules[0].n_cell_types if rules else 0))
+
+        probs = None
+        for rule in rules:
+            probs = rule.apply(self.cell_centroids, current_probs=probs)
+
+        if probs is None:
+            n_cells = self.cell_centroids.shape[0]
+            n_types = rules[0].n_cell_types if rules else 0
+            probs = np.empty((n_cells, n_types))
+
+        return probs
+
+
+class StromalElement:
+    """Background stromal/connective tissue element.
+
+    Represents stromal tissue components such as connective tissue stroma,
+    mesenchyme, or extracellular matrix-rich regions. Features lower cell
+    density than parenchymal tissue and can include embedded structures.
+
+    Parameters
+    ----------
+    frame_size : int, optional
+        Size of the FOV in pixels. Default is 5000.
+    cell_density : float, optional
+        Relative cell density (0-1). 1.0 = normal spacing, 0.5 = half density.
+        Default is 0.6.
+    heterogeneity : float, optional
+        Spatial heterogeneity in cell density (0-1). Default is 0.3.
+    exclude_regions : list of shapely.Polygon, optional
+        Regions where no cells should be placed.
+    tipical_cell_spacing : float, optional
+        Base cell spacing before density adjustment. Default is 12.
+    rules : CellTypeRuleBase or list
+        Rules for cell type assignment. Required.
+
+    Attributes
+    ----------
+    polygon : shapely.Polygon
+        The stromal region polygon.
+    cell_centroids : np.ndarray
+        Cell centroid positions.
+
+    Examples
+    --------
+    >>> from pointillsim.rules import MixOfNCellTypesRule
+    >>> rule = MixOfNCellTypesRule(
+    ...     n_cell_types=4, list_N=[2, 3],  # fibroblasts and immune cells
+    ...     proportions=[0.8, 0.2]
+    ... )
+    >>> stroma = StromalElement(
+    ...     frame_size=500, cell_density=0.5, rules=rule
+    ... )
+    >>> realized = stroma.generate()
+    """
+
+    def __init__(
+        self,
+        frame_size: int = 5000,
+        cell_density: float = 0.6,
+        heterogeneity: float = 0.3,
+        exclude_regions: Optional[list] = None,
+        tipical_cell_spacing: float = 12,
+        rules=None,
+    ) -> None:
+        if rules is None:
+            raise ValueError("No rules provided")
+
+        self.frame_size = frame_size
+        self.cell_density = np.clip(cell_density, 0.1, 1.0)
+        self.heterogeneity = np.clip(heterogeneity, 0, 1)
+        self.exclude_regions = exclude_regions or []
+        self.tipical_cell_spacing = tipical_cell_spacing
+
+        self.rules = rules if isinstance(rules, list) else [rules]
+        self.original_rules = self.rules
+
+        self.polygon = None
+        self.cell_centroids = None
+        self.cell_probabilities = None
+
+        self.rng = np.random.default_rng(seed=int(time.time() * 1e6))
+        self._class_instance_one_hot = None
+
+    @property
+    def scale(self) -> float:
+        """float: Effective scale for rule compatibility."""
+        return self.frame_size / 2
+
+    @property
+    def center(self) -> NDArray[np.floating]:
+        """np.ndarray: Center of the element."""
+        return np.array([[self.frame_size / 2, self.frame_size / 2]])
+
+    def generate(self, **kwargs) -> "StromalElement":
+        """Generate a new realization of this stromal element."""
+        other = copy.deepcopy(self)
+        other.polygon = None
+        other.cell_centroids = None
+        other.cell_probabilities = None
+        other._class_instance_one_hot = None
+        other.rules = other.original_rules
+
+        # Generate polygon (frame minus exclusions)
+        other.polygon = other._generate_polygon()
+
+        # Generate cells
+        other.cell_centroids = other._generate_cells()
+
+        # Apply rules
+        other.rules = [r.adapt_rule_to_element(other) for r in other.rules]
+        other.cell_probabilities = other.apply_rules(other.rules)
+
+        return other
+
+    def _generate_polygon(self) -> Polygon:
+        """Generate the stromal region polygon."""
+        frame = Polygon([
+            (0, 0), (self.frame_size, 0),
+            (self.frame_size, self.frame_size), (0, self.frame_size)
+        ])
+
+        # Subtract excluded regions
+        result = frame
+        for region in self.exclude_regions:
+            if hasattr(region, 'polygon') and region.polygon is not None:
+                result = result.difference(region.polygon)
+            elif isinstance(region, Polygon):
+                result = result.difference(region)
+
+        return result
+
+    def _generate_cells(self) -> NDArray[np.floating]:
+        """Generate cell centroids with variable density."""
+        # Adjust spacing based on density
+        base_spacing = self.tipical_cell_spacing / np.sqrt(self.cell_density)
+
+        x = np.arange(0, self.frame_size, base_spacing, dtype=float)
+        y = np.arange(0, self.frame_size, base_spacing * np.sin(np.pi / 3), dtype=float)
+        X, Y = np.meshgrid(x, y)
+        X[::2] += base_spacing / 2.0
+        points = np.stack((X.flatten(), Y.flatten()), axis=1)
+
+        # Keep points inside polygon
+        mask = np.array([self.polygon.contains(Point(p[0], p[1])) for p in points])
+        points = points[mask]
+
+        # Apply heterogeneity (spatially-correlated random thinning)
+        if self.heterogeneity > 0 and len(points) > 0:
+            noise_scale = self.frame_size / 4
+            # Compute spatially-correlated noise
+            local_noise = np.sin(points[:, 0] / noise_scale) * np.cos(points[:, 1] / noise_scale)
+            local_noise = (local_noise + 1) / 2  # 0-1 range
+
+            # Probability of keeping each cell
+            keep_prob = 1 - self.heterogeneity * (1 - local_noise)
+            keep_mask = np.random.random(len(points)) < keep_prob
+            points = points[keep_mask]
+
+        # Add jitter
+        if len(points) > 0:
+            points += np.random.normal(0, base_spacing / 4.0, points.shape)
+
+        return points
+
+    @property
+    def bounding_box(self) -> Tuple[float, float, float, float]:
+        """tuple: Bounding box of the polygon."""
+        if self.polygon is not None and not self.polygon.is_empty:
+            return self.polygon.bounds
+        return (0, 0, self.frame_size, self.frame_size)
+
+    @property
+    def class_instance(self) -> NDArray[np.integer]:
+        """np.ndarray: Sampled cell type indices."""
+        return np.argmax(self.class_instance_one_hot, axis=1)
+
+    @property
+    def class_instance_one_hot(self) -> NDArray[np.integer]:
+        """np.ndarray: One-hot encoded sampled cell types."""
+        if self._class_instance_one_hot is None:
+            if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+                self._class_instance_one_hot = self.rng.multinomial(
+                    n=1, pvals=self.cell_probabilities
+                )
+            else:
+                self._class_instance_one_hot = np.empty((0, 0), dtype=int)
+        return self._class_instance_one_hot
+
+    @property
+    def ML_class(self) -> NDArray[np.integer]:
+        """np.ndarray: Maximum likelihood cell type."""
+        if self.cell_probabilities is not None and len(self.cell_probabilities) > 0:
+            return np.argmax(self.cell_probabilities, axis=1)
+        return np.empty(0, dtype=int)
+
+    def is_inside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are inside the structure."""
+        return np.array([self.polygon.contains(Point(p[0], p[1])) for p in points], dtype=bool)
+
+    def is_outside(self, points: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Check which points are outside the structure."""
+        return ~self.is_inside(points)
+
+    def remove_cells(self, bool_ix: NDArray[np.bool_]) -> None:
+        """Remove cells at specified indices."""
+        self.cell_centroids = self.cell_centroids[~bool_ix]
+        self.cell_probabilities = self.cell_probabilities[~bool_ix]
+
+    def apply_rules(self, rules) -> NDArray[np.floating]:
+        """Apply rules to compute cell type probabilities."""
+        if self.cell_centroids is None or len(self.cell_centroids) == 0:
+            return np.empty((0, rules[0].n_cell_types if rules else 0))
+
+        probs = None
+        for rule in rules:
+            probs = rule.apply(self.cell_centroids, current_probs=probs)
+
+        if probs is None:
+            n_cells = self.cell_centroids.shape[0]
+            n_types = rules[0].n_cell_types if rules else 0
+            probs = np.empty((n_cells, n_types))
+
+        return probs

@@ -7,6 +7,11 @@ from .structures import (
     LinearLumenStructure,
     LayeredElement,
     BranchingStructure,
+    FibrillarStructure,
+    ClusterElement,
+    GlandularUnit,
+    InterfaceElement,
+    StromalElement,
 )
 
 __all__ = [
@@ -17,4 +22,9 @@ __all__ = [
     "LinearLumenStructure",
     "LayeredElement",
     "BranchingStructure",
+    "FibrillarStructure",
+    "ClusterElement",
+    "GlandularUnit",
+    "InterfaceElement",
+    "StromalElement",
 ]

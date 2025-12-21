@@ -39,6 +39,11 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
+    "pre-commit>=3.0",
+    "black>=24.0",
+    "isort>=5.13",
+    "bandit>=1.7",
+    "pydocstyle>=6.3",
 ]
 anndata = [
     "anndata>=0.8",
@@ -70,3 +75,35 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+exclude = '''
+/(
+    \.git
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["pointillsim"]
+skip_gitignore = true
+
+[tool.bandit]
+exclude_dirs = ["tests", "notebooks"]
+skips = ["B101", "B311"]  # Skip assert and random warnings
+
+[tool.pydocstyle]
+convention = "numpy"
+add-ignore = ["D100", "D104", "D105", "D107"]
+match = "(?!test_).*\\.py"
+match-dir = "pointillsim"

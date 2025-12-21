@@ -76,6 +76,16 @@ from .io.dataset import generate_dataset, load_data
 # Sample data
 from .data import load_sample, list_samples, load_sample_metadata
 
+# Configuration
+from .config import (
+    SimulationConfig,
+    FOVConfig,
+    TissueConfig,
+    ExperimentConfig,
+    ElementConfig,
+    create_example_config,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -127,4 +137,11 @@ __all__ = [
     "load_sample",
     "list_samples",
     "load_sample_metadata",
+    # Configuration
+    "SimulationConfig",
+    "FOVConfig",
+    "TissueConfig",
+    "ExperimentConfig",
+    "ElementConfig",
+    "create_example_config",
 ]

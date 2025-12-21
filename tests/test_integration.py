@@ -428,3 +428,374 @@ class TestReproducibility:
         # Different seed should give different result (probabilistically)
         # Note: This might rarely fail by chance
         # assert fov1.n_cells != fov3.n_cells or not np.allclose(fov1.cell_centroids, fov3.cell_centroids)
+
+
+class TestEdgeCases:
+    """Test edge cases and boundary conditions."""
+
+    def test_empty_fov(self):
+        """Test FOV with no cells (very sparse configuration)."""
+        # Create FOV with zero density
+        bg = lambda: FrameWideElement(
+            frame_size=100,
+            tipical_cell_spacing=10000,  # Very sparse
+            rules=RandomCellTypeRule(n_cell_types=3),
+        )
+        fovd = FOVDistribution(frame_size=100, background_element=bg)
+        fov = fovd.generate_fov()
+
+        # Should handle gracefully even if empty
+        assert fov.cell_centroids.shape[1] == 2
+        assert fov.cell_probabilities.ndim == 2
+
+    def test_single_cell_fov(self):
+        """Test FOV with a single cell."""
+        centroids = np.array([[50.0, 50.0]])
+        probs = np.array([[0.5, 0.3, 0.2]])
+        fov = FOV(centroids, probs)
+
+        assert fov.n_cells == 1
+        assert fov.cell_probabilities.sum() == pytest.approx(1.0)
+        fov.realization()
+        assert fov.class_instance_one_hot.sum() == 1
+
+    def test_single_cell_type(self):
+        """Test simulation with single cell type."""
+        n_cell_types = 1
+        frame_size = 200
+
+        bg = lambda: FrameWideElement(
+            frame_size=frame_size,
+            tipical_cell_spacing=25,
+            rules=SingleTypeRule(n_cell_types=n_cell_types, cell_type_ix=0),
+        )
+        fovd = FOVDistribution(frame_size=frame_size, background_element=bg)
+        fov = fovd.generate_fov()
+
+        assert fov.n_cells > 0
+        # All cells should be approximately type 0 (allowing for small numerical errors)
+        assert np.allclose(fov.cell_probabilities[:, 0], 1.0)
+
+    def test_many_cell_types(self):
+        """Test simulation with many cell types."""
+        n_cell_types = 50
+        frame_size = 300
+
+        bg = lambda: FrameWideElement(
+            frame_size=frame_size,
+            tipical_cell_spacing=20,
+            rules=RandomCellTypeRule(n_cell_types=n_cell_types),
+        )
+        fovd = FOVDistribution(frame_size=frame_size, background_element=bg)
+        fov = fovd.generate_fov()
+
+        assert fov.n_cells > 0
+        assert fov.cell_probabilities.shape[1] == n_cell_types
+        assert np.allclose(fov.cell_probabilities.sum(axis=1), 1.0)
+
+    def test_very_small_fov(self):
+        """Test very small FOV size."""
+        frame_size = 50
+
+        bg = lambda: FrameWideElement(
+            frame_size=frame_size,
+            tipical_cell_spacing=10,
+            rules=RandomCellTypeRule(n_cell_types=3),
+        )
+        fovd = FOVDistribution(frame_size=frame_size, background_element=bg)
+        fov = fovd.generate_fov()
+
+        assert fov.cell_centroids.shape[1] == 2
+        # Cells should be within bounds
+        if fov.n_cells > 0:
+            assert np.all(fov.cell_centroids >= 0)
+            assert np.all(fov.cell_centroids <= frame_size)
+
+    def test_very_large_fov(self):
+        """Test large FOV size (performance check)."""
+        frame_size = 2000
+
+        bg = lambda: FrameWideElement(
+            frame_size=frame_size,
+            tipical_cell_spacing=50,  # Sparse to keep test fast
+            rules=RandomCellTypeRule(n_cell_types=5),
+        )
+        fovd = FOVDistribution(frame_size=frame_size, background_element=bg)
+        fov = fovd.generate_fov()
+
+        assert fov.n_cells > 0
+        # Verify that cells are generated (positions can extend slightly beyond frame)
+        assert fov.cell_centroids.shape[1] == 2
+        # Most cells should be roughly within the expected region
+        assert np.mean(fov.cell_centroids >= 0) > 0.9
+        assert np.mean(fov.cell_centroids <= frame_size * 1.1) > 0.9
+
+    def test_zero_genes(self):
+        """Test tissue with zero genes."""
+        # This should raise an error or handle gracefully
+        tissue = TissueCellTypes()
+        with pytest.raises((ValueError, ZeroDivisionError, IndexError, OverflowError)):
+            tissue.generate_types_and_markers(
+                n_genes=0,
+                n_cell_types=5,
+            )
+
+    def test_extreme_expression_levels(self):
+        """Test with extreme expression levels."""
+        tissue = TissueCellTypes()
+        tissue.generate_types_and_markers(
+            n_genes=10,
+            n_cell_types=5,
+            expected_level=1000.0,  # Very high
+            expected_std_level=500.0,
+        )
+
+        assert np.all(tissue.gene_expression_by_type >= 0)
+        assert tissue.n_genes == 10
+        assert tissue.n_cell_types == 5
+
+    def test_overlapping_elements(self):
+        """Test FOV with many overlapping elements."""
+        n_cell_types = 5
+        frame_size = 500
+
+        bg = lambda: FrameWideElement(
+            frame_size=frame_size,
+            tipical_cell_spacing=30,
+            rules=RandomCellTypeRule(n_cell_types=n_cell_types),
+        )
+
+        def element_factory():
+            return VacuolatedStructure(
+                frame_size=frame_size,
+                scale=100,
+                tipical_cell_spacing=15,
+                rules=SingleTypeRule(n_cell_types=n_cell_types, cell_type_ix=0),
+            )
+
+        fovd = FOVDistribution(
+            frame_size=frame_size,
+            background_element=bg,
+            other_elements=[element_factory],
+            elements_frequency=[0.9],  # High frequency
+            attempts_at_elements=10,  # Many attempts
+        )
+        fov = fovd.generate_fov()
+
+        assert fov.n_cells > 0
+        assert np.allclose(fov.cell_probabilities.sum(axis=1), 1.0)
+
+    def test_uniform_probabilities(self):
+        """Test with uniform probability distribution."""
+        n_cells = 100
+        n_types = 4
+        centroids = np.random.rand(n_cells, 2) * 500
+        probs = np.ones((n_cells, n_types)) / n_types
+
+        fov = FOV(centroids, probs)
+        fov.realization()
+
+        # Types should be distributed roughly uniformly
+        type_counts = fov.class_instance_one_hot.sum(axis=0)
+        assert len(type_counts) == n_types
+        # Allow some variance but types should be somewhat balanced
+        assert type_counts.std() / type_counts.mean() < 0.5
+
+    def test_deterministic_probabilities(self):
+        """Test with deterministic (one-hot) probabilities."""
+        n_cells = 100
+        n_types = 3
+        centroids = np.random.rand(n_cells, 2) * 500
+        probs = np.zeros((n_cells, n_types))
+        # Assign types in a pattern
+        for i in range(n_cells):
+            probs[i, i % n_types] = 1.0
+
+        fov = FOV(centroids, probs)
+        fov.realization()
+
+        # Should match the deterministic pattern
+        assigned_types = fov.class_instance_one_hot.argmax(axis=1)
+        expected_types = np.arange(n_cells) % n_types
+        assert np.array_equal(assigned_types, expected_types)
+
+    def test_new_structure_elements(self):
+        """Test the new structure elements work correctly."""
+        from pointillsim.elements import (
+            FibrillarStructure,
+            ClusterElement,
+            StromalElement,
+        )
+
+        n_cell_types = 5
+        frame_size = 500
+
+        # Test FibrillarStructure (generate() returns a new realized copy)
+        fiber = FibrillarStructure(
+            frame_size=frame_size,
+            n_fibers=3,
+            fiber_width=30,
+            rules=SingleTypeRule(n_cell_types, 0),
+        )
+        realized_fiber = fiber.generate()
+        assert realized_fiber.cell_centroids is not None
+        assert len(realized_fiber.cell_centroids) > 0
+
+        # Test ClusterElement (generate() returns a new realized copy)
+        cluster = ClusterElement(
+            frame_size=frame_size,
+            radius=80,
+            rules=SingleTypeRule(n_cell_types, 1),
+        )
+        realized_cluster = cluster.generate()
+        assert realized_cluster.cell_centroids is not None
+        assert len(realized_cluster.cell_centroids) > 0
+
+        # Test StromalElement (generate() returns a new realized copy)
+        stromal = StromalElement(
+            frame_size=frame_size,
+            rules=SingleTypeRule(n_cell_types, 2),
+        )
+        realized_stromal = stromal.generate()
+        assert realized_stromal.cell_centroids is not None
+        assert len(realized_stromal.cell_centroids) > 0
+
+    def test_new_effects_module(self):
+        """Test the new effects module."""
+        from pointillsim.effects import (
+            BatchEffectModel,
+            TechnicalNoise,
+            BackgroundNoise,
+            DropoutModel,
+        )
+
+        n_cells = 50
+        n_genes = 20
+        expression = np.random.poisson(10, (n_cells, n_genes)).astype(float)
+        positions = np.random.rand(n_cells, 2) * 1000
+
+        # Test BatchEffectModel
+        batch = BatchEffectModel(n_genes=n_genes, n_batches=3)
+        batch.generate_effects()
+        batch_expr = batch.apply(expression, batch_id=1)
+        assert batch_expr.shape == expression.shape
+
+        # Test TechnicalNoise
+        tech_noise = TechnicalNoise(frame_size=1000)
+        noisy_expr = tech_noise.apply(expression, positions)
+        assert noisy_expr.shape == expression.shape
+
+        # Test BackgroundNoise
+        bg_noise = BackgroundNoise(frame_size=1000, background_rate=0.01)
+        x, y, genes = bg_noise.generate_background_dots(n_genes)
+        assert len(x) == len(y) == len(genes)
+
+        # Test DropoutModel
+        dropout = DropoutModel(baseline_detection_rate=0.8)
+        dropped = dropout.apply(expression)
+        assert dropped.shape == expression.shape
+
+    def test_new_design_module(self):
+        """Test the new design module."""
+        from pointillsim.design import (
+            CovariateSystem,
+            Covariate,
+            EffectController,
+            SimulationDesign,
+            DesignMatrix,
+        )
+
+        # Test Covariate
+        cov_cat = Covariate("region", "categorical", values=["A", "B", "C"])
+        cov_cont = Covariate("distance", "continuous", values=[0, 100])
+        assert cov_cat.validate("A")
+        assert not cov_cat.validate("D")
+        assert cov_cont.validate(50)
+
+        # Test CovariateSystem
+        system = CovariateSystem()
+        system.add_covariate(cov_cat)
+        system.add_covariate(cov_cont)
+        config = system.sample_configuration()
+        assert "region" in config
+        assert "distance" in config
+
+        # Test EffectController
+        controller = EffectController()
+        controller.disable("dropout")
+        assert not controller.is_enabled("dropout")
+        assert controller.is_enabled("batch_effect")
+
+        # Test SimulationDesign
+        design = SimulationDesign("test")
+        design.add_covariate(cov_cat)
+        design.set_replicates(2)
+        conditions = design.generate_conditions()
+        assert len(conditions) > 0
+
+        # Test DesignMatrix
+        matrix = DesignMatrix(["region"])
+        matrix.add_row({"region": "A"})
+        matrix.add_row({"region": "B"})
+        assert matrix.n_fovs == 2
+
+    def test_new_validation_module(self):
+        """Test the new validation module."""
+        from pointillsim.validation import DifficultyScorer, ValidationMetrics
+
+        # Generate test data
+        n_cells = 100
+        n_genes = 20
+        expression = np.random.poisson(5, (n_cells, n_genes)).astype(float)
+        cell_types = np.random.randint(0, 3, n_cells)
+        positions = np.random.rand(n_cells, 2) * 1000
+
+        # Test DifficultyScorer
+        scorer = DifficultyScorer(use_classifier=False)
+        scores = scorer.score(expression, cell_types, positions)
+        assert "separability" in scores
+        assert "overall" in scores
+        assert 0 <= scores["overall"] <= 1
+
+        # Test ValidationMetrics
+        validator = ValidationMetrics()
+        sim_expr = np.random.poisson(5, (80, 20)).astype(float)
+        metrics = validator.compare(expression, sim_expr)
+        assert "expression_similarity" in metrics
+        assert "overall_quality" in metrics
+
+    def test_multi_fov_features(self):
+        """Test new multi-FOV generation features."""
+        from pointillsim.core import ConsistentTiling
+        from shapely.geometry import box
+
+        n_cell_types = 3
+        frame_size = 500
+
+        bg = lambda: FrameWideElement(
+            frame_size=frame_size,
+            tipical_cell_spacing=30,
+            rules=RandomCellTypeRule(n_cell_types=n_cell_types),
+        )
+
+        fovd = FOVDistribution(frame_size=frame_size, background_element=bg)
+
+        # Test generate_batch
+        fovs = fovd.generate_batch(n_fovs=3)
+        assert len(fovs) == 3
+        for fov in fovs:
+            assert fov.n_cells > 0
+
+        # Test TissueSlice.generate_multiple
+        region = RegionSpec("test", box(0, 0, 500, 500), fovd)
+        tissue = TissueSlice(frame_size=500, regions=[region])
+        tissue.generate_global()
+        realizations = tissue.generate_multiple(3)
+        assert len(realizations) == 3
+
+        # Test ConsistentTiling
+        tissue.sample_labels()
+        tiles = tissue.tile_into_fovs(fov_size=250, overlap_frac=0.1)
+        tiling = ConsistentTiling(overlap_frac=0.1)
+        consistent_tiles = tiling.ensure_consistency(tiles, tissue)
+        assert len(consistent_tiles) > 0

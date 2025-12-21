@@ -369,8 +369,6 @@ class TestDataExport:
         """Test exporting to AnnData format (if available)."""
         pytest.importorskip("anndata")
 
-        from pointillsim.io import to_anndata
-
         # Create simple FOV
         n_cell_types = 4
         bg = lambda: FrameWideElement(
@@ -393,8 +391,11 @@ class TestDataExport:
         hybiss = HybISS_Setup(tissue)
         hybiss.measure_gene_expression(fov)
 
-        # Export
-        adata = to_anndata(fov, hybiss)
+        # Export using FOV.to_anndata() method
+        adata = fov.to_anndata(
+            gene_names=list(tissue.gene_names),
+            expression_matrix=hybiss.cellxgene_counts,
+        )
 
         assert adata.n_obs == fov.n_cells
         assert adata.n_vars == tissue.n_genes

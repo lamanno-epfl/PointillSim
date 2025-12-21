@@ -40,6 +40,15 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
 ]
+anndata = [
+    "anndata>=0.8",
+    "scipy>=1.7",
+]
+spatialdata = [
+    "spatialdata>=0.1",
+    "geopandas>=0.12",
+    "anndata>=0.8",
+]
 
 [project.urls]
 Homepage = "https://github.com/lamanno-epfl/PointillSim"

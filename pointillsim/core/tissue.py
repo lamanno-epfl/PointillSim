@@ -99,6 +99,119 @@ class TissueCellTypes:
 
         return instance
 
+    @classmethod
+    def load_from_anndata(
+        cls,
+        adata,
+        layer: Optional[str] = None,
+        cell_type_key: str = "cell_type",
+        aggregate: str = "mean",
+    ) -> "TissueCellTypes":
+        """Load expression profiles from an AnnData object.
+
+        Aggregates single-cell expression data by cell type to create
+        cell type-level expression profiles suitable for simulation.
+
+        Parameters
+        ----------
+        adata : anndata.AnnData
+            AnnData object with expression data. Must have cell type
+            annotations in obs.
+        layer : str, optional
+            Layer to use for expression values. If None, uses adata.X.
+        cell_type_key : str, optional
+            Column in adata.obs containing cell type labels. Default "cell_type".
+        aggregate : str, optional
+            Aggregation method: "mean", "median", or "sum". Default "mean".
+
+        Returns
+        -------
+        TissueCellTypes
+            Instance with expression profiles aggregated by cell type.
+
+        Raises
+        ------
+        ImportError
+            If anndata is not installed.
+        ValueError
+            If cell_type_key is not found in adata.obs.
+        ValueError
+            If aggregate method is invalid.
+
+        Examples
+        --------
+        >>> import anndata
+        >>> adata = anndata.read_h5ad("scrnaseq_data.h5ad")
+        >>> tissue = TissueCellTypes.load_from_anndata(adata, cell_type_key="celltype")
+        >>> tissue.n_cell_types
+        10
+        """
+        try:
+            import anndata as ad
+        except ImportError:
+            raise ImportError(
+                "anndata is required for load_from_anndata(). "
+                "Install with: pip install pointillsim[anndata]"
+            )
+
+        if cell_type_key not in adata.obs.columns:
+            raise ValueError(
+                f"Cell type key '{cell_type_key}' not found in adata.obs. "
+                f"Available columns: {list(adata.obs.columns)}"
+            )
+
+        if aggregate not in ("mean", "median", "sum"):
+            raise ValueError(
+                f"aggregate must be 'mean', 'median', or 'sum', got '{aggregate}'"
+            )
+
+        # Get expression matrix
+        if layer is not None:
+            if layer not in adata.layers:
+                raise ValueError(
+                    f"Layer '{layer}' not found. Available: {list(adata.layers.keys())}"
+                )
+            X = adata.layers[layer]
+        else:
+            X = adata.X
+
+        # Convert sparse matrix to dense if needed
+        if hasattr(X, "toarray"):
+            X = X.toarray()
+        X = np.asarray(X)
+
+        # Get cell type labels
+        cell_types = adata.obs[cell_type_key].values
+        unique_types = np.unique(cell_types)
+        n_cell_types = len(unique_types)
+        n_genes = X.shape[1]
+
+        # Aggregate expression by cell type
+        expression_by_type = np.zeros((n_genes, n_cell_types))
+
+        for i, ct in enumerate(unique_types):
+            mask = cell_types == ct
+            if aggregate == "mean":
+                expression_by_type[:, i] = X[mask].mean(axis=0)
+            elif aggregate == "median":
+                expression_by_type[:, i] = np.median(X[mask], axis=0)
+            else:  # sum
+                expression_by_type[:, i] = X[mask].sum(axis=0)
+
+        # Create instance
+        instance = cls(gene_expression_by_type=expression_by_type)
+        instance._gene_names = list(adata.var_names)
+        instance._cell_type_names = [str(ct) for ct in unique_types]
+
+        instance.colordict = {
+            i: plt.cm.turbo(float(i) / n_cell_types) for i in range(n_cell_types)
+        }
+        instance.gene_colordict = {
+            i: plt.cm.turbo(float(i) / n_genes) for i in range(n_genes)
+        }
+
+        return instance
+
     def generate_types_and_markers(
         self,
         n_genes: int,

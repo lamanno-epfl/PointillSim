@@ -3,21 +3,39 @@
 ## High Priority - Core Functionality
 
 ### Missing Histological Elements
-- [ ] **LinearLumenStructure**: Tube-like structures (vessels, ducts) - mentioned in README but not implemented
+- [x] **LinearLumenStructure**: Tube-like structures (vessels, ducts) - mentioned in README but not implemented
 - [ ] **LayeredElement**: For simulating stratified tissue layers (e.g., cortical layers, epidermis)
 - [ ] **BranchingStructure**: For tree-like structures (e.g., ductal networks, vasculature)
 
 ### Cell Type Rules
 - [x] **DistanceBasedRule**: Assign cell types based on distance from element boundary or center
-- [ ] **LayerRule**: Assign types based on radial position (for concentric layer patterns)
-- [ ] **GradientRule**: Create smooth linear gradients across elements
+- [x] **LayerRule**: Assign types based on radial position (for concentric layer patterns)
+- [x] **GradientRule**: Create smooth linear gradients across elements
 - [x] **CompositeRule**: Explicit class for combining multiple rules with configurable weights
 
 ### FOV and Expression
 - [x] **FOV.add_noise()**: Method to add realistic noise to cell positions
 - [x] **FOV.subsample()**: Method to randomly subsample cells (for sparse simulations)
 - [x] **TissueCellTypes.load_from_csv()**: Load real expression profiles from file
-- [ ] **TissueCellTypes.load_from_anndata()**: Load expression profiles from AnnData objects
+- [x] **TissueCellTypes.load_from_anndata()**: Load expression profiles from AnnData objects
+
+### Technology Presets
+- [x] **TechnologyPreset base class**: Abstract class representing a spatial transcriptomics technology
+  - Detection sensitivity parameters (per-gene efficiency distributions)
+  - Number of genes / gene panel constraints
+  - Spatial resolution / localization error
+  - False positive/negative rates
+  - Transcript density limits
+  - Transfer function parameters
+- [x] **Preset implementations**:
+  - [x] **HybISSPreset**: HybISS-specific parameters (current default behavior)
+  - [x] **CartanaPreset**: Cartana/10x Genomics Xenium parameters
+  - [x] **MerfishPreset**: MERFISH parameters (based on 2024 benchmarking papers)
+  - [x] **TenXVisiumPreset**: 10X Visium spot-based parameters
+  - [x] **TenXXeniumPreset**: 10X Xenium in-situ parameters
+- [x] **Integration with HybISS_Setup**: Allow passing TechnologyPreset to configure experiment
+- [x] **Technology-specific transfer functions**: Each preset defines its own detection model
+- [x] **Gene panel validation**: Enforce gene count limits per technology
 
 ## Medium Priority - Usability Improvements
 
@@ -103,8 +121,8 @@
   - Cell type proportion calibration
 
 ### Serialization & I/O
-- [ ] **FOV.to_anndata()**: Export FOV as AnnData object for downstream analysis
-- [ ] **FOV.to_spatialdata()**: Export to SpatialData format
+- [x] **FOV.to_anndata()**: Export FOV as AnnData object for downstream analysis
+- [x] **FOV.to_spatialdata()**: Export to SpatialData format
 - [ ] **TissueSlice.save()** / **TissueSlice.load()**: Pickle or HDF5 serialization
 - [ ] **HybISS_Setup.save_config()**: Save experiment configuration for reproducibility
 
@@ -159,7 +177,7 @@
 - [x] Split `data_simulations.py` into focused modules (see module structure below)
 - [x] Add type hints throughout codebase
 - [x] Add input validation to constructors
-- [ ] Remove duplicate `SingleTypeRule` class definition (lines 339 and 1469)
+- [x] Remove duplicate `SingleTypeRule` class definition (consolidated in spatial.py)
 - [ ] Fix `FrameWideUpdater` one-time-use limitation
 
 ### Testing

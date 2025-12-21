@@ -5,7 +5,7 @@ import time
 import numpy as np
 from shapely.geometry import Point, Polygon
 
-from ..utils.geometry import generate_uniform_points_in_circle
+from ..utils.geometry import generate_uniform_points_in_circle, smooth_polygon
 
 
 class HistologicalElement:
@@ -28,6 +28,9 @@ class HistologicalElement:
         If provided, fixes the element center. Otherwise randomly placed.
     tipical_cell_spacing : float, optional
         Average distance between cell centroids. Default is 8.
+    smoothing_iterations : int, optional
+        Number of Chaikin smoothing iterations to apply to the polygon.
+        0 means no smoothing. Default is 0.
     rules : CellTypeRuleBase or list, optional
         Rule(s) for assigning cell type probabilities. Required.
 
@@ -66,6 +69,7 @@ class HistologicalElement:
         scale=200,
         fixed_center=None,
         tipical_cell_spacing=8,
+        smoothing_iterations=0,
         rules=None,
     ):
         self.n_vertices = n_vertices
@@ -73,6 +77,7 @@ class HistologicalElement:
         self.scale = scale
         self.fixed_center = fixed_center
         self.tipical_cell_spacing = tipical_cell_spacing
+        self.smoothing_iterations = smoothing_iterations
         self.polygon = None
         self.cell_centroids = None
 
@@ -120,7 +125,8 @@ class HistologicalElement:
         """Generate a convex polygon boundary for this element.
 
         Creates a random convex hull from points distributed within a circle
-        centered at the element's center with radius equal to scale.
+        centered at the element's center with radius equal to scale. If
+        smoothing_iterations > 0, applies Chaikin smoothing to the polygon.
 
         Returns
         -------
@@ -140,6 +146,13 @@ class HistologicalElement:
             self.center = self.fixed_center
         points = generate_uniform_points_in_circle(self.center, self.scale, num_points)
         polygon = Polygon(points).convex_hull
+
+        # Apply Chaikin smoothing if requested
+        if self.smoothing_iterations > 0:
+            polygon = smooth_polygon(
+                polygon, iterations=self.smoothing_iterations, preserve_area=True
+            )
+
         return polygon
 
     @property

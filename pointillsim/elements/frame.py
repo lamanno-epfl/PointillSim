@@ -40,7 +40,13 @@ class FrameWideElement(HistologicalElement):
         rules=None,
     ):
         super().__init__(
-            frame_size, n_vertices, scale, center, tipical_cell_spacing, rules
+            frame_size=frame_size,
+            n_vertices=n_vertices,
+            scale=scale,
+            fixed_center=center,
+            tipical_cell_spacing=tipical_cell_spacing,
+            smoothing_iterations=0,
+            rules=rules,
         )
 
     def generate_bounding_polygon(self):

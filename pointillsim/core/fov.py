@@ -241,6 +241,256 @@ class FOV:
         }
         return pd.DataFrame(series_dict)
 
+    def to_anndata(
+        self,
+        gene_names: Optional[List[str]] = None,
+        expression_matrix: Optional[NDArray[np.floating]] = None,
+        include_spatial: bool = True,
+    ):
+        """Export FOV data as an AnnData object.
+
+        Creates an AnnData object suitable for analysis with scanpy and
+        other single-cell analysis tools. Spatial coordinates are stored
+        in obsm['spatial'].
+
+        Parameters
+        ----------
+        gene_names : list of str, optional
+            Gene names for the expression matrix columns. If None and
+            expression_matrix is provided, uses 'Gene_0', 'Gene_1', etc.
+        expression_matrix : np.ndarray, optional
+            Gene expression matrix, shape (n_cells, n_genes). If None,
+            uses cell_probabilities as a placeholder.
+        include_spatial : bool, optional
+            If True, stores spatial coordinates in obsm['spatial'].
+            Default True.
+
+        Returns
+        -------
+        anndata.AnnData
+            AnnData object with:
+            - X: expression matrix or cell probabilities
+            - obs: cell metadata (class_id, morphology if available)
+            - var: gene metadata
+            - obsm['spatial']: spatial coordinates (if include_spatial)
+            - uns['cell_type_probabilities']: soft assignments
+
+        Raises
+        ------
+        ImportError
+            If anndata is not installed.
+
+        Examples
+        --------
+        >>> fov = fov_distribution.generate_fov()
+        >>> adata = fov.to_anndata()
+        >>> import scanpy as sc
+        >>> sc.pl.embedding(adata, basis='spatial', color='class_id')
+        """
+        try:
+            import anndata
+        except ImportError:
+            raise ImportError(
+                "anndata is required for to_anndata(). "
+                "Install with: pip install pointillsim[anndata]"
+            )
+
+        from scipy import sparse
+
+        n_cells = self.n_cells
+
+        # Prepare expression matrix
+        if expression_matrix is not None:
+            X = np.asarray(expression_matrix)
+            if X.shape[0] != n_cells:
+                raise ValueError(
+                    f"expression_matrix has {X.shape[0]} cells, expected {n_cells}"
+                )
+            n_genes = X.shape[1]
+        else:
+            # Use cell probabilities as placeholder
+            X = self.cell_probabilities.copy()
+            n_genes = self.n_cell_types
+
+        # Gene names
+        if gene_names is not None:
+            if len(gene_names) != n_genes:
+                raise ValueError(
+                    f"gene_names has {len(gene_names)} entries, expected {n_genes}"
+                )
+            var_names = gene_names
+        elif expression_matrix is not None:
+            var_names = [f"Gene_{i}" for i in range(n_genes)]
+        else:
+            var_names = [f"CellType_{i}" for i in range(n_genes)]
+
+        # Build obs DataFrame
+        obs_data = {"cell_id": [f"cell_{i}" for i in range(n_cells)]}
+
+        if self.class_instance_one_hot is not None:
+            obs_data["class_id"] = self.class_instance
+
+        # Add morphological properties if available
+        for attr, col_name in [
+            ("cell_minor_axis", "minor_axis"),
+            ("cell_major_axis", "major_axis"),
+            ("cell_rotation", "rotation"),
+            ("cell_rna_concentration", "rna_concentration"),
+        ]:
+            if hasattr(self, attr):
+                obs_data[col_name] = getattr(self, attr)
+
+        obs = pd.DataFrame(obs_data)
+        obs.index = obs["cell_id"]
+
+        # Build var DataFrame
+        var = pd.DataFrame({"gene_name": var_names})
+        var.index = var_names
+
+        # Create AnnData object
+        adata = anndata.AnnData(X=X, obs=obs, var=var)
+
+        # Add spatial coordinates
+        if include_spatial:
+            adata.obsm["spatial"] = self.cell_centroids.copy()
+
+        # Store cell type probabilities in uns
+        adata.uns["cell_type_probabilities"] = self.cell_probabilities.copy()
+
+        # Store one-hot encoding if available
+        if self.class_instance_one_hot is not None:
+            adata.obsm["cell_type_one_hot"] = self.class_instance_one_hot.copy()
+
+        return adata
+
+    def to_spatialdata(
+        self,
+        gene_names: Optional[List[str]] = None,
+        expression_matrix: Optional[NDArray[np.floating]] = None,
+        cell_radius: Optional[Union[float, NDArray[np.floating]]] = None,
+        include_shapes: bool = True,
+    ):
+        """Export FOV data as a SpatialData object.
+
+        Creates a SpatialData object compatible with the scverse ecosystem
+        for spatial transcriptomics analysis.
+
+        Parameters
+        ----------
+        gene_names : list of str, optional
+            Gene names for the expression matrix columns. If None and
+            expression_matrix is provided, uses 'Gene_0', 'Gene_1', etc.
+        expression_matrix : np.ndarray, optional
+            Gene expression matrix, shape (n_cells, n_genes). If None,
+            uses cell_probabilities as a placeholder.
+        cell_radius : float or np.ndarray, optional
+            Radius for cell circles in the shapes layer. If float, uses
+            same radius for all cells. If array, must have length n_cells.
+            If None, uses 5.0 as default or derives from cell_major_axis
+            if available.
+        include_shapes : bool, optional
+            If True, includes cell shapes as circles. Default True.
+
+        Returns
+        -------
+        spatialdata.SpatialData
+            SpatialData object with:
+            - shapes['cells']: GeoDataFrame with cell circle geometries
+            - tables['adata']: AnnData with expression and metadata
+
+        Raises
+        ------
+        ImportError
+            If spatialdata or geopandas is not installed.
+
+        Examples
+        --------
+        >>> fov = fov_distribution.generate_fov()
+        >>> sdata = fov.to_spatialdata()
+        >>> sdata.pl.render_shapes('cells', color='class_id').pl.show()
+
+        Notes
+        -----
+        Requires the spatialdata package: pip install spatialdata
+        """
+        try:
+            import spatialdata as sd
+            from spatialdata.models import ShapesModel, TableModel
+        except ImportError:
+            raise ImportError(
+                "spatialdata is required for to_spatialdata(). "
+                "Install with: pip install spatialdata"
+            )
+
+        try:
+            import geopandas as gpd
+            from shapely.geometry import Point
+        except ImportError:
+            raise ImportError(
+                "geopandas is required for to_spatialdata(). "
+                "Install with: pip install geopandas"
+            )
+
+        n_cells = self.n_cells
+
+        # First create the AnnData object using existing method
+        adata = self.to_anndata(
+            gene_names=gene_names,
+            expression_matrix=expression_matrix,
+            include_spatial=True,
+        )
+
+        # Determine cell radii
+        if cell_radius is not None:
+            if isinstance(cell_radius, (int, float)):
+                radii = np.full(n_cells, float(cell_radius))
+            else:
+                radii = np.asarray(cell_radius)
+                if len(radii) != n_cells:
+                    raise ValueError(
+                        f"cell_radius array has {len(radii)} elements, expected {n_cells}"
+                    )
+        elif hasattr(self, "cell_major_axis"):
+            # Use half of major axis as radius
+            radii = self.cell_major_axis / 2.0
+        else:
+            radii = np.full(n_cells, 5.0)
+
+        sdata_components = {}
+
+        if include_shapes and n_cells > 0:
+            # Create GeoDataFrame with circle geometries
+            geometries = [
+                Point(x, y) for x, y in self.cell_centroids
+            ]
+            shapes_df = gpd.GeoDataFrame(
+                {"radius": radii},
+                geometry=geometries,
+            )
+            shapes_df.index = [f"cell_{i}" for i in range(n_cells)]
+
+            # Parse through ShapesModel
+            shapes_for_sdata = ShapesModel.parse(shapes_df)
+            sdata_components["shapes"] = {"cells": shapes_for_sdata}
+
+            # Link table to shapes
+            adata.obs["region"] = pd.Categorical(["cells"] * n_cells)
+            adata.obs["instance_id"] = shapes_df.index.tolist()
+
+        # Parse AnnData through TableModel
+        adata_for_sdata = TableModel.parse(
+            adata,
+            region="cells" if include_shapes else None,
+            region_key="region" if include_shapes else None,
+            instance_key="instance_id" if include_shapes else None,
+        )
+        sdata_components["tables"] = {"adata": adata_for_sdata}
+
+        # Create SpatialData object
+        sdata = sd.SpatialData(**sdata_components)
+
+        return sdata
+
 
 class FOVDistribution:
     """Stochastic generator for Fields of View with multiple histological elements.

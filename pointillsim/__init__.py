@@ -73,6 +73,9 @@ from .viz.plotting import plot_fov, plot_expression_matrix
 # I/O
 from .io.dataset import generate_dataset, load_data
 
+# Sample data
+from .data import load_sample, list_samples, load_sample_metadata
+
 __all__ = [
     # Version
     "__version__",
@@ -120,4 +123,8 @@ __all__ = [
     # I/O
     "generate_dataset",
     "load_data",
+    # Sample data
+    "load_sample",
+    "list_samples",
+    "load_sample_metadata",
 ]

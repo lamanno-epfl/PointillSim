@@ -1,51 +1,29 @@
 # PointillSim Development TODO
 
-## High Priority - Core Functionality
+## High Priority - Documentation & Usability
+
+### Documentation (Critical for Adoption)
+- [ ] **Update notebooks**: Make notebooks more explanatory by alternating explanations and plots of specific features, clearly describing the logic of the approach
+- [ ] **Sphinx documentation**: Build comprehensive API documentation using Sphinx
+- [ ] **Sample datasets**: Include 3-4 pre-generated sample datasets in compressed format that can be loaded directly via import
+- [ ] **Getting Started Notebook**: Basic usage tutorial
+  - Create tissue, define FOV distribution, generate and visualize
+  - Simple HybISS experiment simulation
+
+### Tissue Descriptions & Examples
+- [ ] **Tissue description folder**: Create a folder with plain-text procedural descriptions of how to create FOVs for specific real tissues (e.g., colon crypts, cortical layers, skin epidermis). These descriptions will:
+  - Serve as reference to verify we have all necessary primitives for detailed tissue simulation
+  - Later be converted to working code showcased in notebooks
+- [ ] **Tissue-specific notebooks**: Create notebooks demonstrating simulations of specific real tissues
+- [ ] **Custom Rules Notebook**: Demonstrate all cell type assignment rules
+  - Examples of each rule type with visualizations
+  - Show how to combine rules for complex patterns
 
 ### Missing Histological Elements
-- [x] **LinearLumenStructure**: Tube-like structures (vessels, ducts) - mentioned in README but not implemented
 - [ ] **LayeredElement**: For simulating stratified tissue layers (e.g., cortical layers, epidermis)
 - [ ] **BranchingStructure**: For tree-like structures (e.g., ductal networks, vasculature)
 
-### Cell Type Rules
-- [x] **DistanceBasedRule**: Assign cell types based on distance from element boundary or center
-- [x] **LayerRule**: Assign types based on radial position (for concentric layer patterns)
-- [x] **GradientRule**: Create smooth linear gradients across elements
-- [x] **CompositeRule**: Explicit class for combining multiple rules with configurable weights
-
-### FOV and Expression
-- [x] **FOV.add_noise()**: Method to add realistic noise to cell positions
-- [x] **FOV.subsample()**: Method to randomly subsample cells (for sparse simulations)
-- [x] **TissueCellTypes.load_from_csv()**: Load real expression profiles from file
-- [x] **TissueCellTypes.load_from_anndata()**: Load expression profiles from AnnData objects
-
-### Technology Presets
-- [x] **TechnologyPreset base class**: Abstract class representing a spatial transcriptomics technology
-  - Detection sensitivity parameters (per-gene efficiency distributions)
-  - Number of genes / gene panel constraints
-  - Spatial resolution / localization error
-  - False positive/negative rates
-  - Transcript density limits
-  - Transfer function parameters
-- [x] **Preset implementations**:
-  - [x] **HybISSPreset**: HybISS-specific parameters (current default behavior)
-  - [x] **CartanaPreset**: Cartana/10x Genomics Xenium parameters
-  - [x] **MerfishPreset**: MERFISH parameters (based on 2024 benchmarking papers)
-  - [x] **TenXVisiumPreset**: 10X Visium spot-based parameters
-  - [x] **TenXXeniumPreset**: 10X Xenium in-situ parameters
-- [x] **Integration with HybISS_Setup**: Allow passing TechnologyPreset to configure experiment
-- [x] **Technology-specific transfer functions**: Each preset defines its own detection model
-- [x] **Gene panel validation**: Enforce gene count limits per technology
-
-## Medium Priority - Usability Improvements
-
-### Polygon Smoothing & Visual Realism
-- [x] **Bevel/Node Smoothing**: Implement smoothing options for polygonal structures to reduce the "angular" appearance
-  - Add Chaikin's corner cutting algorithm or B-spline smoothing
-  - Configurable smoothing iterations parameter
-  - Option to smooth only vertices above a threshold angle
-  - Similar to Adobe Illustrator's "Smooth" path operation
-- [x] **Edge Softening**: Add natural variation to polygon edges (slight noise/perturbation)
+## Medium Priority - Core Features
 
 ### Simulation Modes
 - [ ] **Two Modes of Operation**: Support both random FOV generation and larger tissue simulation
@@ -58,9 +36,7 @@
 - [ ] **TissueSlice.extract_fov(x, y, size)**: Extract a FOV from a specific location
 
 ### Visualization
-- [x] **plot_fov()**: Convenience function to visualize a FOV with multiple panels
 - [ ] **plot_tissue_slice()**: Visualization for TissueSlice with region boundaries
-- [x] **plot_expression_matrix()**: Heatmap visualization for TissueCellTypes
 - [ ] **plot_probability_field()**: Visualization for ProbabilityNodeFieldRule fields
   - Render the underlying probability/logits field as a heatmap or contour plot
   - Show node locations and interpolated probabilities
@@ -74,6 +50,17 @@
   - **GlandularUnit**: Acinar/tubular structures common in many tissues
   - **InterfaceElement**: For modeling tissue boundaries and transition zones
   - **StromalElement**: Background connective tissue with specific properties
+
+### Serialization & I/O
+- [ ] **TissueSlice.save()** / **TissueSlice.load()**: Pickle or HDF5 serialization
+- [ ] **HybISS_Setup.save_config()**: Save experiment configuration for reproducibility
+
+### Configuration
+- [ ] **Config dataclass**: Centralized configuration for simulation parameters
+- [ ] **from_config()** factory methods for main classes
+- [ ] **YAML/JSON config loading**: Load simulation setup from config files
+
+## Lower Priority - Advanced Features
 
 ### Batch Effects & Technical Variation
 - [ ] **BatchEffectModel**: Class for simulating technical batch effects
@@ -120,41 +107,6 @@
   - Spatial statistics comparison
   - Cell type proportion calibration
 
-### Serialization & I/O
-- [x] **FOV.to_anndata()**: Export FOV as AnnData object for downstream analysis
-- [x] **FOV.to_spatialdata()**: Export to SpatialData format
-- [ ] **TissueSlice.save()** / **TissueSlice.load()**: Pickle or HDF5 serialization
-- [ ] **HybISS_Setup.save_config()**: Save experiment configuration for reproducibility
-
-### Configuration
-- [ ] **Config dataclass**: Centralized configuration for simulation parameters
-- [ ] **from_config()** factory methods for main classes
-- [ ] **YAML/JSON config loading**: Load simulation setup from config files
-
-### Showcase Notebooks
-- [ ] **Getting Started Notebook**: Basic usage tutorial
-  - Create tissue, define FOV distribution, generate and visualize
-  - Simple HybISS experiment simulation
-- [ ] **Custom Rules Notebook**: Demonstrate all cell type assignment rules
-  - Examples of each rule type with visualizations
-  - Show how to combine rules for complex patterns
-- [ ] **Advanced Structures Notebook**: Complex tissue simulations
-  - Multiple overlapping structures
-  - Layered and nested elements
-- [ ] **Benchmark Notebook**: Compare simulated vs. real data statistics
-
-### CI & Testing
-- [x] **GitHub Actions CI**: Automated testing pipeline
-  - Run unit tests on push/PR
-  - Test across Python versions (3.9, 3.10, 3.11, 3.12)
-  - Coverage reporting
-- [ ] **Pre-commit Hooks**: Code quality checks
-  - Linting (ruff/flake8)
-  - Formatting (black)
-  - Type checking (mypy)
-
-## Lower Priority - Advanced Features
-
 ### Noise & Realism
 - [ ] **BackgroundNoise**: Add uniform background dots (false positives)
 - [ ] **DropoutModel**: Model gene-specific dropout rates
@@ -166,18 +118,15 @@
 - [ ] **FOVDistribution.generate_batch()**: Parallel FOV generation
 - [ ] **ConsistentTiling**: Ensure cells at tile boundaries have consistent properties
 
-### Documentation
-- [ ] Jupyter notebook tutorials for common use cases
-- [ ] API reference documentation (Sphinx)
-- [ ] Example gallery with different tissue types
+### Showcase Notebooks (Advanced)
+- [ ] **Advanced Structures Notebook**: Complex tissue simulations
+  - Multiple overlapping structures
+  - Layered and nested elements
+- [ ] **Benchmark Notebook**: Compare simulated vs. real data statistics
 
 ## Code Quality
 
 ### Refactoring
-- [x] Split `data_simulations.py` into focused modules (see module structure below)
-- [x] Add type hints throughout codebase
-- [x] Add input validation to constructors
-- [x] Remove duplicate `SingleTypeRule` class definition (consolidated in spatial.py)
 - [ ] Fix `FrameWideUpdater` one-time-use limitation
 
 ### Testing
@@ -186,7 +135,60 @@
 - [ ] Add performance benchmarks
 - [ ] Test edge cases (empty FOVs, single cell, etc.)
 
-## Module Structure (After Refactoring)
+### CI & Testing
+- [ ] **Pre-commit Hooks**: Code quality checks
+  - Linting (ruff/flake8)
+  - Formatting (black)
+  - Type checking (mypy)
+
+---
+
+## Completed
+
+### Histological Elements
+- [x] **LinearLumenStructure**: Tube-like structures (vessels, ducts)
+
+### Cell Type Rules
+- [x] **DistanceBasedRule**: Assign cell types based on distance from element boundary or center
+- [x] **LayerRule**: Assign types based on radial position (for concentric layer patterns)
+- [x] **GradientRule**: Create smooth linear gradients across elements
+- [x] **CompositeRule**: Explicit class for combining multiple rules with configurable weights
+
+### FOV and Expression
+- [x] **FOV.add_noise()**: Method to add realistic noise to cell positions
+- [x] **FOV.subsample()**: Method to randomly subsample cells (for sparse simulations)
+- [x] **TissueCellTypes.load_from_csv()**: Load real expression profiles from file
+- [x] **TissueCellTypes.load_from_anndata()**: Load expression profiles from AnnData objects
+
+### Technology Presets
+- [x] **TechnologyPreset base class**: Abstract class representing a spatial transcriptomics technology
+- [x] **HybISSPreset**, **CartanaPreset**, **MerfishPreset**, **TenXVisiumPreset**, **TenXXeniumPreset**
+- [x] **Integration with HybISS_Setup**: Allow passing TechnologyPreset to configure experiment
+- [x] **Technology-specific transfer functions**: Each preset defines its own detection model
+- [x] **Gene panel validation**: Enforce gene count limits per technology
+
+### Polygon Smoothing & Visual Realism
+- [x] **Bevel/Node Smoothing**: Chaikin's corner cutting algorithm, configurable smoothing
+- [x] **Edge Softening**: Add natural variation to polygon edges
+
+### Visualization
+- [x] **plot_fov()**: Convenience function to visualize a FOV with multiple panels
+- [x] **plot_expression_matrix()**: Heatmap visualization for TissueCellTypes
+
+### Serialization & I/O
+- [x] **FOV.to_anndata()**: Export FOV as AnnData object for downstream analysis
+- [x] **FOV.to_spatialdata()**: Export to SpatialData format
+
+### CI & Testing
+- [x] **GitHub Actions CI**: Automated testing pipeline (Python 3.9-3.12, coverage reporting)
+
+### Refactoring
+- [x] Split `data_simulations.py` into focused modules
+- [x] Add type hints throughout codebase
+- [x] Add input validation to constructors
+- [x] Remove duplicate `SingleTypeRule` class definition
+
+## Module Structure
 
 ```
 pointillsim/

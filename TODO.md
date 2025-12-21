@@ -2,71 +2,15 @@
 
 ## Remaining Tasks
 
-### Abstract Structures & Tissue Variety
-- [ ] **More Abstract Structure Classes**: Expand the variety of histological elements
-  - **FibrillarStructure**: For collagen bundles, muscle fibers, nerve tracts
-  - **ClusterElement**: Groups of cells with shared properties (e.g., lymphoid aggregates)
-  - **GlandularUnit**: Acinar/tubular structures common in many tissues
-  - **InterfaceElement**: For modeling tissue boundaries and transition zones
-  - **StromalElement**: Background connective tissue with specific properties
-
 ### Configuration
 - [ ] **from_config()** factory methods for main classes
 
-### Batch Effects & Technical Variation
-- [ ] **BatchEffectModel**: Class for simulating technical batch effects
-  - Per-FOV systematic shifts in expression levels
-  - Gene-specific and global batch effects
-  - Configurable effect magnitude distributions
-- [ ] **TechnicalNoise**: Model sources of technical variation
-  - Amplification efficiency variation
-  - Optical field non-uniformity (vignetting)
-  - Focus-dependent detection efficiency
-
-### Covariates & Effect Control
-- [ ] **CovariateSystem**: Framework for defining and controlling simulation covariates
-  - Define covariates (continuous or categorical) that influence simulation
-  - Examples: tissue region, distance from landmark, local cell density
-- [ ] **EffectController**: Control specific effects in the simulation
-  - Enable/disable specific sources of variation
-  - Set effect sizes for controlled experiments
-- [ ] **CovariateBasedRule**: Cell type rules that depend on covariates
-  - Assign cell types based on covariate values
-  - Enables complex spatial patterns tied to measurable covariates
-
-### Simulation Design & Control Flow
-- [ ] **SimulationDesign**: High-level class specifying simulation parameters
-  - Define what covariates to vary and their ranges
-  - Specify number of replicates per condition
-  - Control which effects are active
-- [ ] **run_simulation_design()**: Execute a design specification
-  - Generate all FOVs according to design
-  - Return organized dataset with metadata
-- [ ] **DesignMatrix**: Track covariate values across generated FOVs
-
-### Difficulty Scoring & Validation
-- [ ] **DifficultyScorer**: Module for assessing simulation difficulty
-  - Use XGBoost or similar to estimate how hard the classification task is
-  - Metrics: class separability, spatial pattern complexity
-- [ ] **ValidationMetrics**: Compare simulated vs. real data distributions
-  - Expression profile similarity
-  - Spatial statistics comparison
-  - Cell type proportion calibration
-
-### Noise & Realism
-- [ ] **BackgroundNoise**: Add uniform background dots (false positives)
-- [ ] **DropoutModel**: Model gene-specific dropout rates
+### Noise & Realism (Additional)
 - [ ] **CellSizeVariationByType**: Different size distributions per cell type
 - [ ] **SpatialNoise**: Add spatial autocorrelation to cell positions
 
-### Multi-FOV Features
-- [ ] **TissueSlice.generate_multiple()**: Generate multiple realizations
-- [ ] **FOVDistribution.generate_batch()**: Parallel FOV generation
-- [ ] **ConsistentTiling**: Ensure cells at tile boundaries have consistent properties
-
 ### Testing
 - [ ] Add performance benchmarks
-- [ ] Test edge cases (empty FOVs, single cell, etc.)
 
 ### Showcase Notebooks (Advanced)
 - [ ] **Advanced Structures Notebook**: Complex tissue simulations
@@ -77,6 +21,69 @@
 ---
 
 ## Completed
+
+### Abstract Structures & Tissue Variety
+- [x] **FibrillarStructure**: For collagen bundles, muscle fibers, nerve tracts
+- [x] **ClusterElement**: Groups of cells with shared properties (e.g., lymphoid aggregates)
+- [x] **GlandularUnit**: Acinar/tubular structures common in many tissues
+- [x] **InterfaceElement**: For modeling tissue boundaries and transition zones
+- [x] **StromalElement**: Background connective tissue with specific properties
+
+### Batch Effects & Technical Variation
+- [x] **BatchEffectModel**: Class for simulating technical batch effects
+  - Per-FOV systematic shifts in expression levels
+  - Gene-specific and global batch effects
+  - Configurable effect magnitude distributions
+- [x] **TechnicalNoise**: Model sources of technical variation
+  - Amplification efficiency variation
+  - Optical field non-uniformity (vignetting)
+  - Focus-dependent detection efficiency
+- [x] **BackgroundNoise**: Add uniform background dots (false positives)
+- [x] **DropoutModel**: Model gene-specific dropout rates
+
+### Covariates & Effect Control
+- [x] **CovariateSystem**: Framework for defining and controlling simulation covariates
+  - Define covariates (continuous or categorical) that influence simulation
+  - Examples: tissue region, distance from landmark, local cell density
+- [x] **EffectController**: Control specific effects in the simulation
+  - Enable/disable specific sources of variation
+  - Set effect sizes for controlled experiments
+- [x] **CovariateBasedRule**: Cell type rules that depend on covariates
+  - Assign cell types based on covariate values
+  - ThresholdCovariateRule for step-like patterns
+  - SpatialCovariateRule for position-based assignments
+
+### Simulation Design & Control Flow
+- [x] **SimulationDesign**: High-level class specifying simulation parameters
+  - Define what covariates to vary and their ranges
+  - Specify number of replicates per condition
+  - Control which effects are active
+- [x] **run_simulation_design()**: Execute a design specification
+  - Generate all FOVs according to design
+  - Return organized dataset with metadata
+- [x] **DesignMatrix**: Track covariate values across generated FOVs
+
+### Difficulty Scoring & Validation
+- [x] **DifficultyScorer**: Module for assessing simulation difficulty
+  - Metrics: class separability, spatial pattern complexity
+  - Optional classifier-based accuracy estimation
+- [x] **ValidationMetrics**: Compare simulated vs. real data distributions
+  - Expression profile similarity
+  - Spatial statistics comparison
+  - Cell type proportion calibration
+
+### Multi-FOV Features
+- [x] **TissueSlice.generate_multiple()**: Generate multiple realizations
+- [x] **FOVDistribution.generate_batch()**: Parallel FOV generation
+- [x] **ConsistentTiling**: Ensure cells at tile boundaries have consistent properties
+
+### Testing
+- [x] Test edge cases (empty FOVs, single cell, etc.)
+- [x] Tests for new structure elements
+- [x] Tests for effects module
+- [x] Tests for design module
+- [x] Tests for validation module
+- [x] Tests for multi-FOV features
 
 ### Documentation & Usability
 - [x] **Update notebooks**: Make notebooks more explanatory (7 notebooks)
@@ -158,22 +165,34 @@ pointillsim/
 ├── core/
 │   ├── __init__.py
 │   ├── fov.py            # FOV, FOVDistribution
-│   └── tissue.py         # TissueCellTypes, TissueSlice, RegionSpec
+│   └── tissue.py         # TissueCellTypes, TissueSlice, RegionSpec, ConsistentTiling
 ├── data/
 │   ├── __init__.py       # load_sample, list_samples
 │   └── *.npz             # Pre-generated sample datasets
+├── design/
+│   ├── __init__.py
+│   ├── covariates.py     # CovariateSystem, Covariate
+│   ├── controller.py     # EffectController
+│   └── simulation_design.py  # SimulationDesign, DesignMatrix, run_simulation_design
+├── effects/
+│   ├── __init__.py
+│   ├── batch.py          # BatchEffectModel
+│   └── noise.py          # TechnicalNoise, BackgroundNoise, DropoutModel
 ├── elements/
 │   ├── __init__.py
 │   ├── base.py           # HistologicalElement
 │   ├── frame.py          # FrameWideElement, FrameWideUpdater
-│   └── structures.py     # VacuolatedStructure, LayeredElement, BranchingStructure, etc.
+│   └── structures.py     # VacuolatedStructure, LayeredElement, BranchingStructure,
+│                         # FibrillarStructure, ClusterElement, GlandularUnit,
+│                         # InterfaceElement, StromalElement
 ├── rules/
 │   ├── __init__.py
 │   ├── base.py           # CellTypeRuleBase, DummyRule
 │   ├── random.py         # RandomCellTypeRule, MixOfNCellTypesRule
 │   ├── spatial.py        # ProbabilityNodeFieldRule, SingleTypeRule
 │   ├── neighbor.py       # DeterministicNeighborAssignment
-│   └── composite.py      # DistanceBasedRule, CompositeRule, LayerRule, GradientRule
+│   ├── composite.py      # DistanceBasedRule, CompositeRule, LayerRule, GradientRule
+│   └── covariate.py      # CovariateBasedRule, ThresholdCovariateRule, SpatialCovariateRule
 ├── experiment/
 │   ├── __init__.py
 │   ├── hybiss.py         # HybISS_Setup
@@ -186,6 +205,10 @@ pointillsim/
 │   ├── math.py           # lognorm_params_to_mean_std, intuitive_rand_lognormal
 │   ├── interpolation.py  # LinearNDInterpolatorExt
 │   └── encoding.py       # one_hot_encode_array, unfold_int_matrix
+├── validation/
+│   ├── __init__.py
+│   ├── difficulty.py     # DifficultyScorer
+│   └── metrics.py        # ValidationMetrics
 ├── viz/
 │   ├── __init__.py
 │   └── plotting.py       # plot_fov, plot_expression_matrix, plot_tissue_slice, plot_probability_field

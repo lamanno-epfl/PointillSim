@@ -605,3 +605,75 @@ class FOVDistribution:
         fov = FOV(cell_centroids, cell_probabilities)
         fov.realization()
         return fov
+
+    def generate_batch(
+        self,
+        n_fovs: int,
+        seeds: Optional[List[int]] = None,
+        parallel: bool = False,
+        n_jobs: int = -1,
+        progress: bool = False,
+    ) -> List[FOV]:
+        """Generate multiple FOV realizations.
+
+        Efficiently generates many FOVs, optionally in parallel.
+
+        Parameters
+        ----------
+        n_fovs : int
+            Number of FOVs to generate.
+        seeds : list of int, optional
+            Random seeds for each FOV. If None, uses sequential seeds.
+        parallel : bool, optional
+            If True, use parallel processing. Default is False.
+        n_jobs : int, optional
+            Number of parallel jobs. Default -1 uses all cores.
+        progress : bool, optional
+            If True, show progress bar. Default is False.
+
+        Returns
+        -------
+        list of FOV
+            List of generated FOV objects.
+
+        Examples
+        --------
+        >>> fovd = FOVDistribution(frame_size=1000, ...)
+        >>> fovs = fovd.generate_batch(10)
+        >>> len(fovs)
+        10
+        """
+        if seeds is None:
+            seeds = list(range(n_fovs))
+
+        fovs = []
+
+        if parallel:
+            try:
+                from joblib import Parallel, delayed
+
+                def _generate_single(seed):
+                    np.random.seed(seed)
+                    return self.generate_fov()
+
+                fovs = Parallel(n_jobs=n_jobs)(
+                    delayed(_generate_single)(seed) for seed in seeds
+                )
+            except ImportError:
+                # Fall back to sequential if joblib not available
+                parallel = False
+
+        if not parallel:
+            iterator = seeds
+            if progress:
+                try:
+                    from tqdm import tqdm
+                    iterator = tqdm(seeds, desc="Generating FOVs")
+                except ImportError:
+                    pass
+
+            for seed in iterator:
+                np.random.seed(seed)
+                fovs.append(self.generate_fov())
+
+        return fovs

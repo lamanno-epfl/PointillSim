@@ -1,7 +1,7 @@
 """Core FOV and tissue classes for PointillSim."""
 
 from .fov import FOV, FOVDistribution
-from .tissue import TissueCellTypes, TissueSlice, RegionSpec
+from .tissue import TissueCellTypes, TissueSlice, RegionSpec, ConsistentTiling
 
 __all__ = [
     "FOV",
@@ -9,4 +9,5 @@ __all__ = [
     "TissueCellTypes",
     "TissueSlice",
     "RegionSpec",
+    "ConsistentTiling",
 ]

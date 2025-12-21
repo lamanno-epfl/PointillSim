@@ -778,3 +778,241 @@ class TissueSlice:
     def cell_probabilities(self):
         """np.ndarray: Cell type probabilities (for compatibility)."""
         return self._probs
+
+    def generate_multiple(
+        self,
+        n_realizations: int,
+        seeds: Optional[List[int]] = None,
+        resample_cells: bool = False,
+        resample_labels: bool = True,
+    ) -> List[Dict]:
+        """Generate multiple realizations of the tissue slice.
+
+        Creates multiple versions of the tissue, either by resampling
+        the cell positions or just the cell type labels.
+
+        Parameters
+        ----------
+        n_realizations : int
+            Number of realizations to generate.
+        seeds : list of int, optional
+            Random seeds for each realization. If None, uses sequential seeds.
+        resample_cells : bool, optional
+            If True, regenerate cell positions for each realization.
+            If False, only resample labels. Default is False.
+        resample_labels : bool, optional
+            If True, resample cell type labels. Default is True.
+
+        Returns
+        -------
+        list of dict
+            Each dict contains:
+            - 'cell_centroids': np.ndarray of positions
+            - 'cell_probabilities': np.ndarray of probabilities
+            - 'class_onehot': np.ndarray of sampled types
+            - 'seed': the seed used
+
+        Examples
+        --------
+        >>> slice = TissueSlice(5000, regions).generate_global()
+        >>> realizations = slice.generate_multiple(10, resample_labels=True)
+        >>> for r in realizations:
+        ...     print(f"Realization with seed {r['seed']}: {len(r['cell_centroids'])} cells")
+        """
+        if self._cells_xy is None:
+            raise ValueError("No cells generated. Call generate_global() first.")
+
+        if seeds is None:
+            seeds = list(range(n_realizations))
+
+        realizations = []
+
+        for seed in seeds:
+            rng = np.random.default_rng(seed)
+
+            if resample_cells:
+                # Regenerate from scratch
+                self.generate_global()
+                centroids = self._cells_xy.copy()
+                probs = self._probs.copy()
+            else:
+                centroids = self._cells_xy.copy()
+                probs = self._probs.copy()
+
+            if resample_labels:
+                # Resample labels
+                n, k = probs.shape
+                class_onehot = np.zeros((n, k), dtype=int)
+                for i, p in enumerate(probs):
+                    p_sum = p.sum()
+                    if p_sum > 1e-8:
+                        p_normalized = p / p_sum
+                    else:
+                        p_normalized = np.ones(k) / k
+                    try:
+                        choice = rng.choice(k, p=p_normalized)
+                    except ValueError:
+                        choice = np.argmax(p_normalized)
+                    class_onehot[i, choice] = 1
+            else:
+                if self._class_onehot is not None:
+                    class_onehot = self._class_onehot.copy()
+                else:
+                    # Sample once if not already done
+                    self.sample_labels(rng)
+                    class_onehot = self._class_onehot.copy()
+
+            realizations.append({
+                'cell_centroids': centroids,
+                'cell_probabilities': probs,
+                'class_onehot': class_onehot,
+                'class_instance': np.argmax(class_onehot, axis=1),
+                'seed': seed,
+            })
+
+        return realizations
+
+
+class ConsistentTiling:
+    """Utility for creating consistent cell properties across tile boundaries.
+
+    When tiling a tissue into overlapping FOVs, cells that appear in multiple
+    tiles should have identical properties. This class ensures consistency
+    by using cell indices to synchronize properties.
+
+    Parameters
+    ----------
+    overlap_frac : float, optional
+        Fraction of overlap between adjacent tiles. Default is 0.1.
+    seed : int, optional
+        Random seed for reproducibility.
+
+    Examples
+    --------
+    >>> tiling = ConsistentTiling(overlap_frac=0.15)
+    >>> tiles = slice.tile_into_fovs(1000, overlap_frac=0.15)
+    >>> consistent_tiles = tiling.ensure_consistency(tiles, slice)
+    """
+
+    def __init__(self, overlap_frac: float = 0.1, seed: Optional[int] = None):
+        self.overlap_frac = overlap_frac
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)
+        self._property_cache = {}
+
+    def ensure_consistency(
+        self,
+        tiles: List[Dict],
+        tissue_slice: "TissueSlice",
+        properties: Optional[Dict[str, np.ndarray]] = None,
+    ) -> List[Dict]:
+        """Ensure cells in overlapping regions have consistent properties.
+
+        Parameters
+        ----------
+        tiles : list of dict
+            Tiles from TissueSlice.tile_into_fovs().
+        tissue_slice : TissueSlice
+            The source tissue slice.
+        properties : dict of np.ndarray, optional
+            Additional per-cell properties to include. Keys are property names,
+            values are arrays of shape (n_global_cells,).
+
+        Returns
+        -------
+        list of dict
+            Tiles with consistent properties added.
+        """
+        # Cache global properties
+        if properties is not None:
+            self._property_cache.update(properties)
+
+        # Process each tile
+        for tile in tiles:
+            global_idx = tile['idx']
+
+            # Add core properties from tissue slice
+            tile['cell_centroids'] = tissue_slice._cells_xy[global_idx].copy()
+            tile['cell_probabilities'] = tissue_slice._probs[global_idx].copy()
+
+            if tissue_slice._class_onehot is not None:
+                tile['class_onehot'] = tissue_slice._class_onehot[global_idx].copy()
+                tile['class_instance'] = np.argmax(tile['class_onehot'], axis=1)
+
+            # Transform to local coordinates
+            x0, y0, _, _ = tile['bbox']
+            tile['cell_centroids_local'] = tile['cell_centroids'].copy()
+            tile['cell_centroids_local'][:, 0] -= x0
+            tile['cell_centroids_local'][:, 1] -= y0
+
+            # Add cached properties
+            for prop_name, prop_values in self._property_cache.items():
+                tile[prop_name] = prop_values[global_idx].copy()
+
+        return tiles
+
+    def generate_consistent_morphology(
+        self,
+        tissue_slice: "TissueSlice",
+        cell_properties,
+    ) -> Dict[str, np.ndarray]:
+        """Generate morphological properties consistently across the slice.
+
+        Parameters
+        ----------
+        tissue_slice : TissueSlice
+            The source tissue slice.
+        cell_properties : CellTypesProperties
+            Cell type morphology definitions.
+
+        Returns
+        -------
+        dict
+            Dictionary of property arrays keyed by property name.
+        """
+        if tissue_slice._class_onehot is None:
+            raise ValueError("Labels not sampled. Call sample_labels() first.")
+
+        n_cells = len(tissue_slice._cells_xy)
+        cell_types = np.argmax(tissue_slice._class_onehot, axis=1)
+
+        # Generate morphological properties
+        properties = {
+            'minor_axis': np.zeros(n_cells),
+            'major_axis': np.zeros(n_cells),
+            'rotation': np.zeros(n_cells),
+            'rna_concentration': np.zeros(n_cells),
+        }
+
+        for cell_type in range(tissue_slice.n_cell_types):
+            mask = cell_types == cell_type
+            n_type = mask.sum()
+
+            if n_type == 0:
+                continue
+
+            # Get properties for this cell type
+            mean_minor = cell_properties.cell_minor_axis_mean[cell_type]
+            std_minor = cell_properties.cell_minor_axis_std[cell_type]
+            mean_major = cell_properties.cell_major_axis_mean[cell_type]
+            std_major = cell_properties.cell_major_axis_std[cell_type]
+            concentration = cell_properties.cell_rna_concentration[cell_type]
+
+            # Sample with consistent RNG
+            properties['minor_axis'][mask] = self.rng.normal(mean_minor, std_minor, n_type)
+            properties['major_axis'][mask] = self.rng.normal(mean_major, std_major, n_type)
+            properties['rotation'][mask] = self.rng.uniform(0, 2 * np.pi, n_type)
+            properties['rna_concentration'][mask] = concentration
+
+        # Ensure positive values
+        properties['minor_axis'] = np.maximum(properties['minor_axis'], 1)
+        properties['major_axis'] = np.maximum(properties['major_axis'], 1)
+
+        # Store in cache
+        self._property_cache.update(properties)
+
+        return properties
+
+    def reset_cache(self):
+        """Clear the property cache."""
+        self._property_cache = {}

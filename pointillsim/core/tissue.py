@@ -520,3 +520,261 @@ class TissueSlice:
                     "idx": np.where(keep)[0]
                 })
         return tiles
+
+    def extract_fov(
+        self,
+        x0: float,
+        y0: float,
+        fov_size: int,
+        local_coords: bool = True,
+    ):
+        """Extract a single FOV from a specific location.
+
+        Creates an FOV-like object containing cells within the specified
+        bounding box. Useful for extracting specific regions of interest
+        or for custom tiling strategies.
+
+        Parameters
+        ----------
+        x0 : float
+            X coordinate of the FOV bottom-left corner.
+        y0 : float
+            Y coordinate of the FOV bottom-left corner.
+        fov_size : int
+            Size of the extracted FOV in pixels.
+        local_coords : bool, optional
+            If True, translate coordinates to local FOV space (0 to fov_size).
+            If False, keep global coordinates. Default True.
+
+        Returns
+        -------
+        dict
+            Dictionary containing:
+            - 'cell_centroids': np.ndarray of cell positions
+            - 'cell_probabilities': np.ndarray of probabilities
+            - 'class_instance': np.ndarray of sampled types (if available)
+            - 'global_indices': np.ndarray of indices in the global slice
+            - 'bbox': (x0, y0, x1, y1) bounding box
+
+        Examples
+        --------
+        >>> slice.generate_global().sample_labels()
+        >>> fov = slice.extract_fov(x0=1000, y0=2000, fov_size=500)
+        >>> print(f"Extracted {len(fov['cell_centroids'])} cells")
+        """
+        if self._cells_xy is None:
+            raise ValueError("No cells generated. Call generate_global() first.")
+
+        x1, y1 = x0 + fov_size, y0 + fov_size
+        X, Y = self._cells_xy[:, 0], self._cells_xy[:, 1]
+        mask = (X >= x0) & (X < x1) & (Y >= y0) & (Y < y1)
+        indices = np.where(mask)[0]
+
+        centroids = self._cells_xy[mask].copy()
+        if local_coords:
+            centroids[:, 0] -= x0
+            centroids[:, 1] -= y0
+
+        result = {
+            'cell_centroids': centroids,
+            'cell_probabilities': self._probs[mask].copy(),
+            'global_indices': indices,
+            'bbox': (x0, y0, x1, y1),
+            'frame_size': fov_size,
+        }
+
+        if self._class_onehot is not None:
+            result['class_onehot'] = self._class_onehot[mask].copy()
+            result['class_instance'] = np.argmax(self._class_onehot[mask], axis=1)
+
+        return result
+
+    def save(self, filepath: str, format: str = 'auto'):
+        """Save the TissueSlice to a file.
+
+        Serializes the tissue slice including cell positions, probabilities,
+        and sampled labels. Region specifications are not saved (they contain
+        non-serializable FOVDistribution objects).
+
+        Parameters
+        ----------
+        filepath : str
+            Path to save the file.
+        format : str, optional
+            File format: 'npz', 'pickle', 'hdf5', or 'auto' (from extension).
+            Default 'auto'.
+
+        Notes
+        -----
+        - 'npz': Compressed NumPy format, portable, recommended for sharing
+        - 'pickle': Python pickle, preserves all attributes but less portable
+        - 'hdf5': HDF5 format, requires h5py, good for very large slices
+
+        Examples
+        --------
+        >>> slice.generate_global().sample_labels()
+        >>> slice.save('my_tissue.npz')
+        >>> # or
+        >>> slice.save('my_tissue.h5', format='hdf5')
+        """
+        if format == 'auto':
+            if filepath.endswith('.npz'):
+                format = 'npz'
+            elif filepath.endswith('.pkl') or filepath.endswith('.pickle'):
+                format = 'pickle'
+            elif filepath.endswith('.h5') or filepath.endswith('.hdf5'):
+                format = 'hdf5'
+            else:
+                format = 'npz'
+
+        if format == 'npz':
+            self._save_npz(filepath)
+        elif format == 'pickle':
+            self._save_pickle(filepath)
+        elif format == 'hdf5':
+            self._save_hdf5(filepath)
+        else:
+            raise ValueError(f"Unknown format: {format}")
+
+    def _save_npz(self, filepath: str):
+        """Save to compressed NumPy format."""
+        data = {
+            'frame_size': np.array([self.frame_size]),
+            'cells_xy': self._cells_xy if self._cells_xy is not None else np.empty((0, 2)),
+            'probs': self._probs if self._probs is not None else np.empty((0, 0)),
+        }
+        if self._class_onehot is not None:
+            data['class_onehot'] = self._class_onehot
+        np.savez_compressed(filepath, **data)
+
+    def _save_pickle(self, filepath: str):
+        """Save to pickle format."""
+        import pickle
+        data = {
+            'frame_size': self.frame_size,
+            '_cells_xy': self._cells_xy,
+            '_probs': self._probs,
+            '_class_onehot': self._class_onehot,
+        }
+        with open(filepath, 'wb') as f:
+            pickle.dump(data, f)
+
+    def _save_hdf5(self, filepath: str):
+        """Save to HDF5 format."""
+        import h5py
+        with h5py.File(filepath, 'w') as f:
+            f.attrs['frame_size'] = self.frame_size
+            if self._cells_xy is not None:
+                f.create_dataset('cells_xy', data=self._cells_xy, compression='gzip')
+            if self._probs is not None:
+                f.create_dataset('probs', data=self._probs, compression='gzip')
+            if self._class_onehot is not None:
+                f.create_dataset('class_onehot', data=self._class_onehot, compression='gzip')
+
+    @classmethod
+    def load(cls, filepath: str, format: str = 'auto') -> 'TissueSlice':
+        """Load a TissueSlice from a file.
+
+        Loads cell positions and probabilities from a saved file.
+        Region specifications are not restored (they must be recreated
+        if needed for further generation).
+
+        Parameters
+        ----------
+        filepath : str
+            Path to the saved file.
+        format : str, optional
+            File format: 'npz', 'pickle', 'hdf5', or 'auto' (from extension).
+            Default 'auto'.
+
+        Returns
+        -------
+        TissueSlice
+            Loaded tissue slice with cells and probabilities.
+
+        Examples
+        --------
+        >>> slice = TissueSlice.load('my_tissue.npz')
+        >>> print(f"Loaded {len(slice._cells_xy)} cells")
+        """
+        if format == 'auto':
+            if filepath.endswith('.npz'):
+                format = 'npz'
+            elif filepath.endswith('.pkl') or filepath.endswith('.pickle'):
+                format = 'pickle'
+            elif filepath.endswith('.h5') or filepath.endswith('.hdf5'):
+                format = 'hdf5'
+            else:
+                format = 'npz'
+
+        if format == 'npz':
+            return cls._load_npz(filepath)
+        elif format == 'pickle':
+            return cls._load_pickle(filepath)
+        elif format == 'hdf5':
+            return cls._load_hdf5(filepath)
+        else:
+            raise ValueError(f"Unknown format: {format}")
+
+    @classmethod
+    def _load_npz(cls, filepath: str) -> 'TissueSlice':
+        """Load from compressed NumPy format."""
+        data = np.load(filepath)
+        frame_size = int(data['frame_size'][0])
+        obj = cls(frame_size=frame_size, regions=[])
+        obj._cells_xy = data['cells_xy']
+        obj._probs = data['probs']
+        if 'class_onehot' in data:
+            obj._class_onehot = data['class_onehot']
+        return obj
+
+    @classmethod
+    def _load_pickle(cls, filepath: str) -> 'TissueSlice':
+        """Load from pickle format."""
+        import pickle
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+        obj = cls(frame_size=data['frame_size'], regions=[])
+        obj._cells_xy = data['_cells_xy']
+        obj._probs = data['_probs']
+        obj._class_onehot = data['_class_onehot']
+        return obj
+
+    @classmethod
+    def _load_hdf5(cls, filepath: str) -> 'TissueSlice':
+        """Load from HDF5 format."""
+        import h5py
+        with h5py.File(filepath, 'r') as f:
+            frame_size = int(f.attrs['frame_size'])
+            obj = cls(frame_size=frame_size, regions=[])
+            if 'cells_xy' in f:
+                obj._cells_xy = f['cells_xy'][:]
+            if 'probs' in f:
+                obj._probs = f['probs'][:]
+            if 'class_onehot' in f:
+                obj._class_onehot = f['class_onehot'][:]
+        return obj
+
+    @property
+    def n_cells(self) -> int:
+        """int: Number of cells in the tissue slice."""
+        if self._cells_xy is None:
+            return 0
+        return len(self._cells_xy)
+
+    @property
+    def n_cell_types(self) -> int:
+        """int: Number of cell types."""
+        if self._probs is None or self._probs.shape[1] == 0:
+            return 0
+        return self._probs.shape[1]
+
+    @property
+    def cell_centroids(self):
+        """np.ndarray: Cell centroid positions (for compatibility)."""
+        return self._cells_xy
+
+    @property
+    def cell_probabilities(self):
+        """np.ndarray: Cell type probabilities (for compatibility)."""
+        return self._probs

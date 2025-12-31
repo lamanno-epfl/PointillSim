@@ -28,7 +28,32 @@ extensions = [
     'sphinx.ext.intersphinx',
     'sphinx.ext.mathjax',
     'myst_parser',
+    'nbsphinx',
+    'matplotlib.sphinxext.plot_directive',
 ]
+
+# Plot directive settings
+plot_include_source = True
+plot_html_show_source_link = False
+plot_formats = ['png']
+plot_html_show_formats = False
+
+# nbsphinx settings
+nbsphinx_execute = 'never'  # Don't re-execute notebooks during build
+nbsphinx_allow_errors = True  # Continue build even if notebooks have errors
+
+# Set pandoc path for nbsphinx
+import os
+os.environ['PATH'] = '/Users/gioelelamanno/mambaforge/envs/metallic/lib/python3.11/site-packages/pypandoc/files:' + os.environ.get('PATH', '')
+nbsphinx_prolog = """
+.. raw:: html
+
+    <style>
+        .nbinput .prompt, .nboutput .prompt {
+            display: none;
+        }
+    </style>
+"""
 
 # Napoleon settings for Google/NumPy style docstrings
 napoleon_google_docstring = True

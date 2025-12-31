@@ -86,6 +86,18 @@ from .config import (
     create_example_config,
 )
 
+# Effects (noise, batch, admixture)
+from .effects import (
+    BatchEffectModel,
+    TechnicalNoise,
+    BackgroundNoise,
+    DropoutModel,
+    Lateral2DAdmixture,
+    ZAxisAdmixture,
+    CompositeAdmixture,
+    AdmixtureMetrics,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -144,4 +156,13 @@ __all__ = [
     "ExperimentConfig",
     "ElementConfig",
     "create_example_config",
+    # Effects
+    "BatchEffectModel",
+    "TechnicalNoise",
+    "BackgroundNoise",
+    "DropoutModel",
+    "Lateral2DAdmixture",
+    "ZAxisAdmixture",
+    "CompositeAdmixture",
+    "AdmixtureMetrics",
 ]

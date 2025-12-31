@@ -22,6 +22,27 @@
 
 ## Completed
 
+### Admixture Modeling (Segmentation Artifacts)
+- [x] **AdmixtureModel**: Base class for admixture simulation
+  - Apply after dot generation (modifies cell assignments)
+  - Track admixture source for ground truth
+  - Configurable admixture rates
+- [x] **Lateral2DAdmixture**: Boundary-based misassignment
+  - Dots near cell boundaries reassigned to spatial neighbors
+  - Probability inversely proportional to distance from boundary
+  - Parameters: boundary_width, transfer_rate, distance_decay
+- [x] **ZAxisAdmixture**: Out-of-plane cell contamination
+  - Models cells above/below imaging plane (tissue section thickness)
+  - Z-neighbor types correlated with local 2D neighborhood composition
+  - Parameters: z_contamination_rate, neighborhood_correlation
+- [x] **CompositeAdmixture**: Combine multiple admixture effects
+- [x] **AdmixtureMetrics**: Quantify admixture effects
+  - Per-cell contamination fraction
+  - Contamination flow between cell types
+  - Spatial pattern analysis
+- [x] **Admixture tests**: 24 comprehensive tests
+- [x] **Admixture notebook**: Tutorial notebook (13_admixture_simulation.ipynb)
+
 ### Abstract Structures & Tissue Variety
 - [x] **FibrillarStructure**: For collagen bundles, muscle fibers, nerve tracts
 - [x] **ClusterElement**: Groups of cells with shared properties (e.g., lymphoid aggregates)

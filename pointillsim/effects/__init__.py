@@ -5,14 +5,27 @@ This module provides classes for modeling:
 - Technical noise: Optical and amplification-related variation
 - Background noise: False positive transcript detections
 - Dropout: Gene-specific detection failures
+- Admixture: Transcript misassignment from segmentation errors and 3D tissue complexity
 """
 
 from .batch import BatchEffectModel
 from .noise import BackgroundNoise, DropoutModel, TechnicalNoise
+from .admixture import (
+    AdmixtureModel,
+    Lateral2DAdmixture,
+    ZAxisAdmixture,
+    CompositeAdmixture,
+    AdmixtureMetrics,
+)
 
 __all__ = [
     "BatchEffectModel",
     "TechnicalNoise",
     "BackgroundNoise",
     "DropoutModel",
+    "AdmixtureModel",
+    "Lateral2DAdmixture",
+    "ZAxisAdmixture",
+    "CompositeAdmixture",
+    "AdmixtureMetrics",
 ]

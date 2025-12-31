@@ -9,7 +9,7 @@ This module provides classes for modeling:
 """
 
 from .batch import BatchEffectModel
-from .noise import BackgroundNoise, DropoutModel, TechnicalNoise
+from .noise import BackgroundNoise, DropoutModel, TechnicalNoise, SpatialNoise
 from .admixture import (
     AdmixtureModel,
     Lateral2DAdmixture,
@@ -23,6 +23,7 @@ __all__ = [
     "TechnicalNoise",
     "BackgroundNoise",
     "DropoutModel",
+    "SpatialNoise",
     "AdmixtureModel",
     "Lateral2DAdmixture",
     "ZAxisAdmixture",

@@ -482,3 +482,261 @@ class DropoutModel:
         if data.get("gene_detection_rates") is not None:
             model.gene_detection_rates = np.array(data["gene_detection_rates"])
         return model
+
+
+@dataclass
+class SpatialNoise:
+    """Model for spatially varying noise levels across a FOV.
+
+    Simulates the common observation that some regions of a FOV (or entire FOVs)
+    have higher or lower noise levels due to technical issues such as:
+    - Uneven focus across the field
+    - Tissue folding or debris
+    - Regional autofluorescence
+    - Edge effects
+
+    Creates a spatial noise field that can be used to modulate expression
+    or detection efficiency across positions.
+
+    Parameters
+    ----------
+    frame_size : int
+        Size of the FOV in pixels.
+    noise_pattern : str
+        Type of spatial noise pattern:
+        - 'gradient': Linear gradient across FOV
+        - 'radial': Radial pattern from center
+        - 'patches': Random patch-based variation
+        - 'perlin': Perlin-like smooth noise
+        Default is 'patches'.
+    base_level : float
+        Baseline noise/efficiency level (1.0 = no effect). Default 1.0.
+    variation_strength : float
+        Strength of spatial variation (0 = none, 1 = strong). Default 0.3.
+    n_patches : int
+        Number of noise patches (for 'patches' pattern). Default 5.
+    gradient_direction : float
+        Direction of gradient in radians (for 'gradient' pattern). Default 0.
+    seed : int, optional
+        Random seed for reproducibility.
+
+    Attributes
+    ----------
+    noise_field : np.ndarray
+        2D spatial noise field, shape (frame_size, frame_size).
+
+    Examples
+    --------
+    >>> spatial_noise = SpatialNoise(frame_size=1000, noise_pattern='patches')
+    >>> spatial_noise.generate_field()
+    >>> factors = spatial_noise.get_factors_at_positions(cell_positions)
+    >>> noisy_expression = expression * factors[:, np.newaxis]
+    """
+
+    frame_size: int
+    noise_pattern: str = "patches"
+    base_level: float = 1.0
+    variation_strength: float = 0.3
+    n_patches: int = 5
+    gradient_direction: float = 0.0
+    seed: Optional[int] = None
+    noise_field: NDArray[np.floating] = field(default=None, repr=False)
+
+    def __post_init__(self):
+        """Initialize random state and validate parameters."""
+        self.rng = np.random.default_rng(seed=self.seed)
+
+        valid_patterns = {'gradient', 'radial', 'patches', 'perlin'}
+        if self.noise_pattern not in valid_patterns:
+            raise ValueError(
+                f"noise_pattern must be one of {valid_patterns}, "
+                f"got '{self.noise_pattern}'"
+            )
+
+        if not 0 <= self.variation_strength <= 1:
+            raise ValueError("variation_strength must be in [0, 1]")
+
+    def generate_field(self) -> "SpatialNoise":
+        """Generate the spatial noise field.
+
+        Returns
+        -------
+        SpatialNoise
+            Self, for method chaining.
+        """
+        if self.noise_pattern == "gradient":
+            self.noise_field = self._generate_gradient()
+        elif self.noise_pattern == "radial":
+            self.noise_field = self._generate_radial()
+        elif self.noise_pattern == "patches":
+            self.noise_field = self._generate_patches()
+        elif self.noise_pattern == "perlin":
+            self.noise_field = self._generate_perlin_like()
+
+        return self
+
+    def _generate_gradient(self) -> NDArray[np.floating]:
+        """Generate linear gradient pattern."""
+        x = np.linspace(-1, 1, self.frame_size)
+        y = np.linspace(-1, 1, self.frame_size)
+        X, Y = np.meshgrid(x, y)
+
+        # Gradient in specified direction
+        gradient = (
+            np.cos(self.gradient_direction) * X +
+            np.sin(self.gradient_direction) * Y
+        )
+        gradient = (gradient + 1) / 2  # Normalize to [0, 1]
+
+        return self.base_level + self.variation_strength * (gradient - 0.5)
+
+    def _generate_radial(self) -> NDArray[np.floating]:
+        """Generate radial pattern from center."""
+        x = np.linspace(-1, 1, self.frame_size)
+        y = np.linspace(-1, 1, self.frame_size)
+        X, Y = np.meshgrid(x, y)
+
+        R = np.sqrt(X**2 + Y**2) / np.sqrt(2)  # Normalize to [0, 1]
+
+        return self.base_level - self.variation_strength * R
+
+    def _generate_patches(self) -> NDArray[np.floating]:
+        """Generate random patch-based variation."""
+        field = np.ones((self.frame_size, self.frame_size)) * self.base_level
+
+        for _ in range(self.n_patches):
+            # Random patch center and size
+            cx = self.rng.uniform(0, self.frame_size)
+            cy = self.rng.uniform(0, self.frame_size)
+            radius = self.rng.uniform(
+                self.frame_size * 0.1, self.frame_size * 0.3
+            )
+
+            # Random effect (positive or negative)
+            effect = self.rng.uniform(
+                -self.variation_strength, self.variation_strength
+            )
+
+            # Apply Gaussian patch
+            x = np.arange(self.frame_size)
+            y = np.arange(self.frame_size)
+            X, Y = np.meshgrid(x, y)
+
+            dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
+            patch = effect * np.exp(-dist**2 / (2 * radius**2))
+            field += patch
+
+        return field
+
+    def _generate_perlin_like(self) -> NDArray[np.floating]:
+        """Generate smooth Perlin-like noise pattern."""
+        # Multi-scale noise approximation
+        field = np.zeros((self.frame_size, self.frame_size))
+
+        for scale in [4, 8, 16, 32]:
+            # Generate random noise at lower resolution
+            noise_size = max(4, self.frame_size // scale)
+            noise = self.rng.normal(0, 1, (noise_size, noise_size))
+
+            # Upsample to full resolution using bilinear interpolation
+            from scipy.ndimage import zoom
+            factor = self.frame_size / noise_size
+            upsampled = zoom(noise, factor, order=1)
+
+            # Trim to exact size if needed
+            upsampled = upsampled[:self.frame_size, :self.frame_size]
+
+            # Add with decreasing amplitude for higher frequencies
+            field += upsampled / scale
+
+        # Normalize
+        field = (field - field.min()) / (field.max() - field.min() + 1e-10)
+
+        return self.base_level + self.variation_strength * (field - 0.5)
+
+    def get_factors_at_positions(
+        self,
+        positions: NDArray[np.floating]
+    ) -> NDArray[np.floating]:
+        """Get noise factors at specific positions.
+
+        Parameters
+        ----------
+        positions : np.ndarray
+            Positions to query, shape (n_positions, 2).
+
+        Returns
+        -------
+        np.ndarray
+            Noise factors at each position.
+        """
+        if self.noise_field is None:
+            self.generate_field()
+
+        # Convert positions to grid indices
+        indices = np.clip(
+            positions.astype(int),
+            0, self.frame_size - 1
+        )
+
+        return self.noise_field[indices[:, 1], indices[:, 0]]
+
+    def apply(
+        self,
+        expression: NDArray[np.floating],
+        positions: NDArray[np.floating],
+    ) -> NDArray[np.floating]:
+        """Apply spatial noise to expression matrix.
+
+        Parameters
+        ----------
+        expression : np.ndarray
+            Gene expression matrix, shape (n_cells, n_genes).
+        positions : np.ndarray
+            Cell centroid positions, shape (n_cells, 2).
+
+        Returns
+        -------
+        np.ndarray
+            Expression matrix with spatial noise applied.
+        """
+        factors = self.get_factors_at_positions(positions)
+        return np.maximum(expression * factors[:, np.newaxis], 0)
+
+    def plot_field(self, ax=None, cmap: str = "RdBu_r"):
+        """Visualize the spatial noise field.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on. Creates new figure if None.
+        cmap : str
+            Colormap for visualization.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+            The axes with the plot.
+        """
+        import matplotlib.pyplot as plt
+
+        if self.noise_field is None:
+            self.generate_field()
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 8))
+
+        im = ax.imshow(
+            self.noise_field,
+            cmap=cmap,
+            origin="lower",
+            extent=[0, self.frame_size, 0, self.frame_size],
+            vmin=self.base_level - self.variation_strength,
+            vmax=self.base_level + self.variation_strength,
+        )
+        ax.set_title(f"Spatial Noise Field ({self.noise_pattern})")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        plt.colorbar(im, ax=ax, label="Noise Factor")
+
+        return ax

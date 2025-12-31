@@ -84,6 +84,7 @@ from .config import (
     ExperimentConfig,
     ElementConfig,
     create_example_config,
+    build_simulation_from_config,
 )
 
 # Effects (noise, batch, admixture)
@@ -92,6 +93,7 @@ from .effects import (
     TechnicalNoise,
     BackgroundNoise,
     DropoutModel,
+    SpatialNoise,
     Lateral2DAdmixture,
     ZAxisAdmixture,
     CompositeAdmixture,
@@ -156,11 +158,13 @@ __all__ = [
     "ExperimentConfig",
     "ElementConfig",
     "create_example_config",
+    "build_simulation_from_config",
     # Effects
     "BatchEffectModel",
     "TechnicalNoise",
     "BackgroundNoise",
     "DropoutModel",
+    "SpatialNoise",
     "Lateral2DAdmixture",
     "ZAxisAdmixture",
     "CompositeAdmixture",

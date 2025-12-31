@@ -321,6 +321,189 @@ class SimulationConfig:
         return errors
 
 
+def build_simulation_from_config(
+    config: SimulationConfig,
+) -> Dict[str, Any]:
+    """Build simulation components from a configuration.
+
+    Creates all necessary PointillSim objects from a SimulationConfig,
+    ready for generating FOVs and observations.
+
+    Parameters
+    ----------
+    config : SimulationConfig
+        Configuration object.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - 'tissue': TissueCellTypes object
+        - 'cell_props': CellTypesProperties object
+        - 'fov_distribution': FOVDistribution object
+        - 'hybiss': HybISS_Setup object
+        - 'config': The original config
+
+    Examples
+    --------
+    >>> config = SimulationConfig.load('my_config.yaml')
+    >>> sim = build_simulation_from_config(config)
+    >>> fov = sim['fov_distribution'].generate_fov()
+    >>> sim['cell_props'].apply(fov)
+    >>> sim['hybiss'].observe_dots(fov)
+    >>> dots_df = sim['hybiss'].make_pandas_df()
+    """
+    from .core.tissue import TissueCellTypes
+    from .core.fov import FOVDistribution
+    from .experiment.properties import CellTypesProperties
+    from .experiment.hybiss import HybISS_Setup
+    from .experiment.transfer import IdentityTransfer, AffineNonNegTransfer
+    from .elements.frame import FrameWideElement
+    from .elements.structures import VacuolatedStructure, LinearLumenStructure
+    from .rules.random import RandomCellTypeRule, MixOfNCellTypesRule
+    from .rules.spatial import SingleTypeRule
+    from .rules.composite import LayerRule
+
+    # Set seed if provided
+    if config.fov.seed is not None:
+        np.random.seed(config.fov.seed)
+
+    # Create tissue
+    tissue = TissueCellTypes()
+
+    if config.tissue.expression_file:
+        tissue.load_from_csv(config.tissue.expression_file)
+    else:
+        tissue.generate_types_and_markers(
+            n_genes=config.tissue.n_genes,
+            n_cell_types=config.tissue.n_cell_types,
+        )
+
+    if config.tissue.gene_names:
+        tissue._gene_names = config.tissue.gene_names
+    if config.tissue.cell_type_names:
+        tissue._cell_type_names = config.tissue.cell_type_names
+
+    # Create cell properties
+    cell_props = CellTypesProperties(n_cell_types=config.tissue.n_cell_types)
+
+    # Build rule from config
+    def _build_rule(rule_type: str, rule_params: dict, n_cell_types: int):
+        """Build a rule from configuration."""
+        rule_type = rule_type.lower()
+
+        if rule_type in ('randomcelltype', 'random'):
+            return RandomCellTypeRule(n_cell_types=n_cell_types)
+        elif rule_type in ('singletype', 'single'):
+            cell_type_ix = rule_params.get('cell_type_ix', 0)
+            return SingleTypeRule(n_cell_types=n_cell_types, cell_type_ix=cell_type_ix)
+        elif rule_type == 'layer':
+            return LayerRule(
+                n_cell_types=n_cell_types,
+                layer_types=rule_params.get('layer_types', [0, 1]),
+                layer_boundaries=rule_params.get('layer_boundaries', [0.5]),
+                transition_width=rule_params.get('transition_width', 10),
+            )
+        elif rule_type == 'mix':
+            return MixOfNCellTypesRule(
+                n_cell_types=n_cell_types,
+                list_N=rule_params.get('types', [0, 1]),
+                proportions=rule_params.get('proportions', [0.5, 0.5]),
+            )
+        else:
+            return RandomCellTypeRule(n_cell_types=n_cell_types)
+
+    # Build element factories from config
+    def _build_element_factory(elem_config: ElementConfig, frame_size: int, n_cell_types: int):
+        """Build an element factory function from configuration."""
+        rule = _build_rule(elem_config.rule_type, elem_config.rule_params, n_cell_types)
+        elem_type = elem_config.element_type.lower()
+
+        if elem_type == 'vacuolatedstructure':
+            def factory():
+                return VacuolatedStructure(
+                    frame_size=frame_size,
+                    scale=elem_config.scale,
+                    rules=rule,
+                    **elem_config.extra_params,
+                )
+            return factory
+        elif elem_type == 'linearlumenstructure':
+            def factory():
+                return LinearLumenStructure(
+                    frame_size=frame_size,
+                    width=elem_config.scale,
+                    rules=rule,
+                    **elem_config.extra_params,
+                )
+            return factory
+        else:
+            # Default to simple element
+            from .elements.base import HistologicalElement
+            def factory():
+                return HistologicalElement(
+                    frame_size=frame_size,
+                    scale=elem_config.scale,
+                    rules=rule,
+                    **elem_config.extra_params,
+                )
+            return factory
+
+    # Create background element factory
+    def background_factory():
+        return FrameWideElement(
+            frame_size=config.fov.frame_size,
+            tipical_cell_spacing=config.cell_spacing.background_spacing,
+            rules=RandomCellTypeRule(n_cell_types=config.tissue.n_cell_types),
+        )
+
+    # Create element factories
+    element_factories = []
+    element_frequencies = []
+    for elem_config in config.elements:
+        factory = _build_element_factory(
+            elem_config,
+            config.fov.frame_size,
+            config.tissue.n_cell_types,
+        )
+        element_factories.append(factory)
+        element_frequencies.append(elem_config.extra_params.get('frequency', 0.5))
+
+    # Create FOV distribution
+    fov_distribution = FOVDistribution(
+        frame_size=config.fov.frame_size,
+        background_element=background_factory,
+        other_elements=element_factories if element_factories else None,
+        elements_frequency=element_frequencies if element_frequencies else None,
+    )
+
+    # Create transfer function
+    tf_type = config.experiment.transfer_function.lower()
+    if tf_type == 'identity':
+        transfer_function = IdentityTransfer()
+    else:
+        transfer_function = AffineNonNegTransfer(
+            scales=config.experiment.genes_sensitivities,
+            scales_std=config.experiment.genes_sensitivities_variation,
+        )
+
+    # Create HybISS setup
+    hybiss = HybISS_Setup(
+        tissue=tissue,
+        genes_sensitivities=config.experiment.genes_sensitivities,
+        genes_sensitivities_variation=config.experiment.genes_sensitivities_variation,
+        transfer_function=transfer_function,
+    )
+
+    return {
+        'tissue': tissue,
+        'cell_props': cell_props,
+        'fov_distribution': fov_distribution,
+        'hybiss': hybiss,
+        'config': config,
+    }
+
+
 def create_example_config() -> SimulationConfig:
     """Create an example simulation configuration.
 

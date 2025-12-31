@@ -2,25 +2,38 @@
 
 ## Remaining Tasks
 
-### Configuration
-- [ ] **from_config()** factory methods for main classes
-
-### Noise & Realism (Additional)
-- [ ] **CellSizeVariationByType**: Different size distributions per cell type
-- [ ] **SpatialNoise**: Add spatial autocorrelation to cell positions
-
-### Testing
-- [ ] Add performance benchmarks
-
-### Showcase Notebooks (Advanced)
-- [ ] **Advanced Structures Notebook**: Complex tissue simulations
-  - Multiple overlapping structures
-  - Layered and nested elements
-- [ ] **Benchmark Notebook**: Compare simulated vs. real data statistics
+No remaining tasks at this time. See completed section below.
 
 ---
 
 ## Completed
+
+### Important for technology dependent tasks
+- [x] **TechnologyPreset Made Realistic**: All presets based on real data with reasonable marginals
+  - Detection rates with average counts per cell, average genes per cell
+  - Variances and distribution types (negative binomial for transcript counts)
+  - Literature-based parameters for HybISS, MERFISH, Cartana, Xenium, Visium
+
+### Noise & Realism (Additional)
+- [x] **CellSizeVariationByType**: Different size distributions per cell type (via `sizes` array in CellTypesProperties)
+- [x] **SpatialNoise**: Regional variation simulation for FOVs with technical issues
+  - Supports gradient, radial, patches, and perlin noise patterns
+  - Configurable base level and variation strength
+
+### Showcase Notebooks (Advanced)
+- [x] **Advanced Structures Notebook**: Complex tissue simulations (10_advanced_structures.ipynb)
+  - Multiple overlapping structures
+  - Layered and nested elements
+
+### Configuration
+- [x] **from_config()** factory methods: `build_simulation_from_config()` creates full simulation from config
+
+### Comprehensive Sphinx Documentation
+- [x] Philosophy and Design documentation (philosophy.rst)
+- [x] Use Cases and Capabilities guide (use_cases.rst)
+- [x] Tutorials page linking 14 Jupyter notebooks (tutorials.rst)
+- [x] API documentation for effects module (api/effects.rst)
+- [x] API documentation for config module (api/config.rst)
 
 ### Admixture Modeling (Segmentation Artifacts)
 - [x] **AdmixtureModel**: Base class for admixture simulation

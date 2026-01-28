@@ -48,7 +48,7 @@ from .rules.base import CellTypeRuleBase, DummyRule
 from .rules.random import RandomCellTypeRule, MixOfNCellTypesRule
 from .rules.spatial import ProbabilityNodeFieldRule, SingleTypeRule
 from .rules.neighbor import DeterministicNeighborAssignment
-from .rules.composite import DistanceBasedRule, CompositeRule
+from .rules.composite import DistanceBasedRule, CompositeRule, LayerRule, GradientRule
 
 # Experiment simulation
 from .experiment.hybiss import HybISS_Setup
@@ -100,6 +100,9 @@ from .effects import (
     AdmixtureMetrics,
 )
 
+# Validation and difficulty scoring
+from .validation import DifficultyScorer, ValidationMetrics
+
 __all__ = [
     # Version
     "__version__",
@@ -124,6 +127,8 @@ __all__ = [
     "DeterministicNeighborAssignment",
     "DistanceBasedRule",
     "CompositeRule",
+    "LayerRule",
+    "GradientRule",
     # Experiment
     "HybISS_Setup",
     "CellTypesProperties",
@@ -169,4 +174,7 @@ __all__ = [
     "ZAxisAdmixture",
     "CompositeAdmixture",
     "AdmixtureMetrics",
+    # Validation
+    "DifficultyScorer",
+    "ValidationMetrics",
 ]

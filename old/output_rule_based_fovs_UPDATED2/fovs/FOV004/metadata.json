@@ -1,0 +1,15 @@
+{
+  "seed": 1127,
+  "X_present": false,
+  "Y_present": false,
+  "y_centroid": null,
+  "n_cells_total": 2279,
+  "z_added": 3,
+  "rule_params": {
+    "ABSENT_LOGIT": -12.0,
+    "DELTA_Y_A": 9.0,
+    "DELTA_Y_B": 12.0,
+    "DELTA_X_B": 13.0,
+    "DIST_LOGIT_SLOPE": 12.0
+  }
+}

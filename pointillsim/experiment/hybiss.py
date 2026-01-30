@@ -96,6 +96,7 @@ class HybISS_Setup:
             * (fov.class_instance_one_hot @ self.M.T)
             * self.genes_sensitivities
         )
+        cellxgene_expectation[cellxgene_expectation < 0] = 0.0
         self.cellxgene_counts = self.rng.poisson(cellxgene_expectation)
         self.cellxtotal_counts = self.cellxgene_counts.sum(axis=1)
         return self.cellxgene_counts

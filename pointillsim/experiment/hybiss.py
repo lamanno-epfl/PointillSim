@@ -119,30 +119,46 @@ class HybISS_Setup:
         """
         self.measure_gene_expression(fov)
 
-        self.dot_belongsto_by_cells = []
-        self.dot_isgene_by_cells = []
-        self.dot_xs_by_cells = []
-        self.dot_ys_by_cells = []
+        n_cells = self.cellxgene_counts.shape[0]
+        n_genes = self.cellxgene_counts.shape[1]
 
-        for i in range(self.cellxgene_counts.shape[0]):
-            xs, ys = generate_points_asin_cell(
-                fov.cell_centroids[i],
-                1.0,
-                self.cellxtotal_counts[i],
-                fov.cell_major_axis[i],
-                fov.cell_minor_axis[i],
-                fov.cell_rotation[i],
-            ).T
-            self.dot_xs_by_cells.append(xs)
-            self.dot_ys_by_cells.append(ys)
-            tmp_is = []
-            tmp_js = []
-            for j in range(self.cellxgene_counts.shape[1]):
-                for _ in range(self.cellxgene_counts[i, j]):
-                    tmp_js.append(j)
-                    tmp_is.append(i)
-            self.dot_belongsto_by_cells.append(tmp_is)
-            self.dot_isgene_by_cells.append(tmp_js)
+        # --- Vectorized cell/gene index assignment ---
+        # Build flat arrays: for each (cell, gene) pair, repeat by its count
+        flat_counts = self.cellxgene_counts.ravel()  # (n_cells * n_genes,)
+        gene_template = np.tile(np.arange(n_genes), n_cells)
+        cell_template = np.repeat(np.arange(n_cells), n_genes)
+
+        all_gene_indices = np.repeat(gene_template, flat_counts)
+        all_cell_indices = np.repeat(cell_template, flat_counts)
+
+        total_dots = len(all_gene_indices)
+
+        # --- Vectorized spatial point generation ---
+        # Replicate generate_points_asin_cell logic for all dots at once
+        dot_centers = fov.cell_centroids[all_cell_indices]
+        dot_major = fov.cell_major_axis[all_cell_indices]
+        dot_minor = fov.cell_minor_axis[all_cell_indices]
+
+        center_balance = 0.4
+        smeer = 0.4
+        scale = 1.0
+        scale_param = (scale * (1 + smeer / 2.0)) ** (2.0 / center_balance)
+
+        raw = np.random.normal(0, 1, (total_dots, 2))
+        renorm = np.linalg.norm(raw, axis=1, keepdims=True)
+        u = np.random.uniform(0, scale_param, (total_dots, 1))
+        samples = 0.5 * u ** (center_balance * 0.5) * raw / (renorm + smeer)
+        samples[:, 0] *= dot_major
+        samples[:, 1] *= dot_minor
+
+        all_xs = dot_centers[:, 0] + samples[:, 0]
+        all_ys = dot_centers[:, 1] + samples[:, 1]
+
+        # Store as single-element lists for make_pandas_df compatibility
+        self.dot_xs_by_cells = [all_xs]
+        self.dot_ys_by_cells = [all_ys]
+        self.dot_belongsto_by_cells = [all_cell_indices]
+        self.dot_isgene_by_cells = [all_gene_indices]
 
     def make_pandas_df(self):
         """Export observed dots as a DataFrame.

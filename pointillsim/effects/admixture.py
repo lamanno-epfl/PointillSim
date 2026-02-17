@@ -204,7 +204,6 @@ class Lateral2DAdmixture(AdmixtureModel):
 
         # Estimate cell radii if not provided
         if cell_radii is None:
-            # Estimate from average spacing between cells
             if n_cells > 1:
                 tree = KDTree(cell_centroids)
                 dists, _ = tree.query(cell_centroids, k=2)
@@ -213,60 +212,82 @@ class Lateral2DAdmixture(AdmixtureModel):
             else:
                 cell_radii = np.full(n_cells, 10.0)
 
-        # Build KD-tree for cell centroids
         cell_tree = KDTree(cell_centroids)
 
-        # Get dot positions and current assignments
+        # --- Vectorized distance computation ---
         dot_positions = dots_df[["x", "y"]].values
         dot_cells = dots_df["cell"].values.astype(int)
 
-        # Track admixture events
-        admixture_events = []
+        valid_mask = (dot_cells >= 0) & (dot_cells < n_cells)
+        safe_cells = np.clip(dot_cells, 0, n_cells - 1)
 
-        # For each dot, check if it's in the boundary zone
-        for i, (pos, cell_idx) in enumerate(zip(dot_positions, dot_cells)):
-            if cell_idx < 0 or cell_idx >= n_cells:
-                continue
+        assigned_centers = cell_centroids[safe_cells]
+        dists_to_center = np.linalg.norm(dot_positions - assigned_centers, axis=1)
+        assigned_radii = cell_radii[safe_cells]
+        dist_from_boundary = assigned_radii - dists_to_center
 
-            cell_center = cell_centroids[cell_idx]
-            cell_radius = cell_radii[cell_idx]
+        # Dots in boundary zone
+        boundary_mask = (
+            valid_mask
+            & (dist_from_boundary > 0)
+            & (dist_from_boundary <= self.boundary_width)
+        )
 
-            # Distance from cell center
-            dist_to_center = np.linalg.norm(pos - cell_center)
+        # Transfer probability for boundary dots
+        transfer_probs = np.zeros(len(dots_df))
+        transfer_probs[boundary_mask] = self.transfer_rate * np.exp(
+            -self.distance_decay * dist_from_boundary[boundary_mask]
+        )
 
-            # Distance from boundary (positive = inside, negative = outside)
-            dist_from_boundary = cell_radius - dist_to_center
+        # Stochastic selection
+        rand_vals = self.rng.random(len(dots_df))
+        transfer_mask = boundary_mask & (rand_vals < transfer_probs)
+        transfer_indices = np.where(transfer_mask)[0]
 
-            # Check if dot is in boundary zone
-            if dist_from_boundary <= self.boundary_width and dist_from_boundary > 0:
-                # Probability of transfer increases near boundary
-                transfer_prob = self.transfer_rate * np.exp(
-                    -self.distance_decay * dist_from_boundary
+        if len(transfer_indices) > 0:
+            transfer_positions = dot_positions[transfer_indices]
+            transfer_cells = dot_cells[transfer_indices]
+
+            # Batch KDTree query for all transferring dots at once
+            _, all_neighbors = cell_tree.query(transfer_positions, k=3)
+
+            # Pick first neighbor that differs from the current cell
+            new_cells = np.full(len(transfer_indices), -1, dtype=int)
+            for k_col in range(3):
+                neighbor_col = all_neighbors[:, k_col]
+                can_assign = (
+                    (neighbor_col != transfer_cells)
+                    & (neighbor_col < n_cells)
+                    & (new_cells == -1)
                 )
+                new_cells[can_assign] = neighbor_col[can_assign]
 
-                if self.rng.random() < transfer_prob:
-                    # Find nearest neighbor cell
-                    _, neighbors = cell_tree.query(pos, k=3)
+            # Apply reassignments in bulk
+            has_new = new_cells >= 0
+            actual_transfer = transfer_indices[has_new]
+            actual_new_cells = new_cells[has_new]
 
-                    # Pick a neighbor that isn't the current cell
-                    for neighbor_idx in neighbors:
-                        if neighbor_idx != cell_idx and neighbor_idx < n_cells:
-                            # Reassign dot to neighbor
-                            dots_df.at[dots_df.index[i], "cell"] = neighbor_idx
-                            admixture_events.append(
-                                {
-                                    "dot_index": i,
-                                    "original_cell": cell_idx,
-                                    "new_cell": neighbor_idx,
-                                    "original_type": cell_types[cell_idx],
-                                    "new_type": cell_types[neighbor_idx],
-                                    "source": "lateral_2d",
-                                }
-                            )
-                            break
+            cell_col = dots_df["cell"].values.copy()
+            original_cells = cell_col[actual_transfer].copy()
+            cell_col[actual_transfer] = actual_new_cells
+            dots_df["cell"] = cell_col
 
-        # Store admixture record
-        self.admixture_record = pd.DataFrame(admixture_events)
+            admixture_events = pd.DataFrame(
+                {
+                    "dot_index": actual_transfer,
+                    "original_cell": original_cells,
+                    "new_cell": actual_new_cells,
+                    "original_type": cell_types[original_cells],
+                    "new_type": cell_types[actual_new_cells],
+                    "source": "lateral_2d",
+                }
+            )
+        else:
+            admixture_events = pd.DataFrame(
+                columns=["dot_index", "original_cell", "new_cell", "source"]
+            )
+
+        self.admixture_record = admixture_events
         self.admixture_record.attrs["n_total_dots"] = len(dots_df)
 
         return dots_df
@@ -399,7 +420,6 @@ class ZAxisAdmixture(AdmixtureModel):
         pd.DataFrame
             Modified DataFrame with some dots reassigned.
         """
-        # Note: cell_radii and kwargs accepted for API consistency
         del kwargs  # unused
         _ = cell_radii  # unused
 
@@ -418,13 +438,8 @@ class ZAxisAdmixture(AdmixtureModel):
         global_type_counts = np.bincount(cell_types, minlength=n_cell_types)
         global_type_dist = global_type_counts / global_type_counts.sum()
 
-        # Build KD-tree
         cell_tree = KDTree(cell_centroids)
 
-        # Track admixture events
-        admixture_events = []
-
-        # Select dots to be contaminated
         n_dots = len(dots_df)
         n_contaminated = int(n_dots * self.z_contamination_rate)
 
@@ -435,71 +450,127 @@ class ZAxisAdmixture(AdmixtureModel):
             self.admixture_record.attrs["n_total_dots"] = len(dots_df)
             return dots_df
 
-        # Randomly select dots to contaminate
-        contaminated_indices = self.rng.choice(n_dots, size=n_contaminated, replace=False)
+        contaminated_indices = self.rng.choice(
+            n_dots, size=n_contaminated, replace=False
+        )
 
-        for dot_idx in contaminated_indices:
-            original_cell = int(dots_df.iloc[dot_idx]["cell"])
+        # --- Precompute lookups ---
+        # cells_by_type: precompute once instead of per-dot np.where
+        cells_by_type = [
+            np.where(cell_types == t)[0] for t in range(n_cell_types)
+        ]
 
-            if original_cell < 0 or original_cell >= n_cells:
-                continue
+        # Extract cell assignments as numpy array (avoid DataFrame row access)
+        all_dot_cells = dots_df["cell"].values.astype(int)
+        original_cells = all_dot_cells[contaminated_indices].copy()
 
-            # Get local neighborhood type distribution
-            local_type_dist = self._get_neighborhood_type_distribution(
-                original_cell, cell_centroids, cell_types, n_cell_types, cell_tree
+        # Identify unique cells among contaminated dots and precompute
+        # their neighborhood distributions (expensive KDTree query done
+        # once per unique cell instead of once per dot)
+        unique_cells = np.unique(original_cells)
+        unique_cells = unique_cells[
+            (unique_cells >= 0) & (unique_cells < n_cells)
+        ]
+        neighborhood_dists = {}
+        for cell_idx in unique_cells:
+            neighborhood_dists[cell_idx] = (
+                self._get_neighborhood_type_distribution(
+                    cell_idx, cell_centroids, cell_types,
+                    n_cell_types, cell_tree,
+                )
             )
 
-            # Blend local and global distributions based on correlation
-            blended_dist = (
-                self.neighborhood_correlation * local_type_dist
+        # --- Process contaminated dots grouped by original cell ---
+        new_cells = np.full(n_contaminated, -1, dtype=int)
+
+        # Group dot indices by their original cell for batch processing
+        sort_order = np.argsort(original_cells)
+        sorted_orig = original_cells[sort_order]
+        split_points = np.searchsorted(
+            sorted_orig,
+            unique_cells,
+            side="left",
+        )
+        split_points_right = np.searchsorted(
+            sorted_orig,
+            unique_cells,
+            side="right",
+        )
+
+        for g, cell_idx in enumerate(unique_cells):
+            local_dist = neighborhood_dists.get(cell_idx)
+            if local_dist is None:
+                continue
+
+            # Blended distribution for this cell
+            blended = (
+                self.neighborhood_correlation * local_dist
                 + (1 - self.neighborhood_correlation) * global_type_dist
             )
-
-            # Exclude the current cell's type from being a source
-            # (admixture comes from different cells)
-            current_type = cell_types[original_cell]
-            blended_dist[current_type] *= 0.1  # Reduce, don't eliminate
-
-            # Renormalize
-            if blended_dist.sum() > 0:
-                blended_dist /= blended_dist.sum()
+            current_type = cell_types[cell_idx]
+            blended[current_type] *= 0.1
+            bsum = blended.sum()
+            if bsum > 0:
+                blended /= bsum
             else:
-                blended_dist = global_type_dist.copy()
+                blended = global_type_dist.copy()
 
-            # Sample a "virtual" z-neighbor type
-            z_neighbor_type = self.rng.choice(n_cell_types, p=blended_dist)
-
-            # Find a real cell of that type to use as the expression source
-            cells_of_type = np.where(cell_types == z_neighbor_type)[0]
-            if len(cells_of_type) == 0:
+            # All dots in this group share the same blended distribution
+            grp_start = split_points[g]
+            grp_end = split_points_right[g]
+            grp_sorted_idx = sort_order[grp_start:grp_end]
+            n_grp = len(grp_sorted_idx)
+            if n_grp == 0:
                 continue
 
-            # Prefer spatially closer cells of the target type
-            dists = np.linalg.norm(
-                cell_centroids[cells_of_type] - cell_centroids[original_cell], axis=1
-            )
-            weights = 1.0 / (dists + 1.0)
-            weights /= weights.sum()
-            source_cell = self.rng.choice(cells_of_type, p=weights)
+            # Batch-sample z-neighbor types for all dots in group
+            z_types = self.rng.choice(n_cell_types, size=n_grp, p=blended)
 
-            # Reassign this dot to appear as if from the z-neighbor cell
-            # In real admixture, the dot stays in the same position but
-            # represents contamination. We mark the cell assignment.
-            dots_df.at[dots_df.index[dot_idx], "cell"] = source_cell
+            # For each unique z_type in this group, compute source cells
+            unique_z = np.unique(z_types)
+            for zt in unique_z:
+                candidates = cells_by_type[zt]
+                if len(candidates) == 0:
+                    continue
+                zt_mask = z_types == zt
+                zt_indices = grp_sorted_idx[zt_mask]
+                n_zt = len(zt_indices)
 
-            admixture_events.append(
-                {
-                    "dot_index": dot_idx,
-                    "original_cell": original_cell,
-                    "new_cell": int(source_cell),
-                    "original_type": current_type,
-                    "new_type": z_neighbor_type,
-                    "source": "z_axis",
-                }
-            )
+                # Distance-weighted sampling from candidates
+                dists = np.linalg.norm(
+                    cell_centroids[candidates] - cell_centroids[cell_idx],
+                    axis=1,
+                )
+                weights = 1.0 / (dists + 1.0)
+                weights /= weights.sum()
+                source_cells = self.rng.choice(
+                    candidates, size=n_zt, p=weights
+                )
+                new_cells[zt_indices] = source_cells
 
-        # Store admixture record
-        self.admixture_record = pd.DataFrame(admixture_events)
+        # --- Apply reassignments in bulk ---
+        has_new = new_cells >= 0
+        actual_contam_pos = np.where(has_new)[0]
+        actual_dot_indices = contaminated_indices[actual_contam_pos]
+        actual_new = new_cells[actual_contam_pos]
+        actual_orig = original_cells[actual_contam_pos]
+
+        cell_col = dots_df["cell"].values.copy()
+        cell_col[actual_dot_indices] = actual_new
+        dots_df["cell"] = cell_col
+
+        admixture_events = pd.DataFrame(
+            {
+                "dot_index": actual_dot_indices,
+                "original_cell": actual_orig,
+                "new_cell": actual_new,
+                "original_type": cell_types[actual_orig],
+                "new_type": cell_types[actual_new],
+                "source": "z_axis",
+            }
+        )
+
+        self.admixture_record = admixture_events
         self.admixture_record.attrs["n_total_dots"] = len(dots_df)
 
         return dots_df
